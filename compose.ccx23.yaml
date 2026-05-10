@@ -1,0 +1,40 @@
+# Compose für Hetzner CCX23.
+# - Port wird NICHT publish'd — Caddy / interne Apps erreichen den Router
+#   über das `cockpit`-Docker-Netz unter http://llm-router:7842.
+# - Config liegt in /etc/llm-router/config.yaml (vom Deploy-Script gepflegt).
+# - Volume /var/lib/llm-router/data hält die SQLite-Metrics persistent.
+
+services:
+  llm-router:
+    image: llm-router:dev
+    container_name: llm-router
+    restart: unless-stopped
+    networks:
+      - cockpit
+    volumes:
+      - /etc/llm-router/config.yaml:/etc/llm-router/config.yaml:ro
+      - /var/lib/llm-router/data:/data
+    environment:
+      LLM_ROUTER_CONFIG: /etc/llm-router/config.yaml
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7842/health"]
+      interval: 30s
+      timeout: 4s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # Optional: für Tailscale-Zugriff vom Host (Caddy o.ä. via Docker-Netz)
+    # ports:
+    #   - "127.0.0.1:7842:7842"
+
+networks:
+  cockpit:
+    external: true

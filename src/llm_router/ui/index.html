@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>llm-router · Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "media",
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["ui-sans-serif", "system-ui", "Inter", "sans-serif"],
+            mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { font-feature-settings: "ss01", "cv11"; }
+    .badge { @apply inline-flex items-center rounded px-2 py-0.5 text-xs font-medium; }
+    .bar { transition: width 0.4s ease-out; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 min-h-screen font-sans">
+  <header class="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/70 backdrop-blur sticky top-0 z-10">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded bg-gradient-to-br from-indigo-500 to-fuchsia-500 grid place-items-center text-white font-bold">L</div>
+        <div>
+          <h1 class="text-lg font-semibold leading-none">llm-router</h1>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Zentraler Routing-Hub · <span id="version">…</span></p>
+        </div>
+      </div>
+      <div class="flex items-center gap-4 text-sm">
+        <div class="flex items-center gap-2"><span id="status-dot" class="w-2 h-2 rounded-full bg-slate-400"></span><span id="status-label">…</span></div>
+        <div class="text-slate-500 dark:text-slate-400">Uptime <span id="uptime" class="font-mono">…</span></div>
+        <div class="text-slate-500 dark:text-slate-400">Letzte Aktualisierung <span id="last-update" class="font-mono">—</span></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-8 grid gap-6 lg:grid-cols-3">
+
+    <!-- KPIs -->
+    <section class="lg:col-span-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+        <p class="text-xs text-slate-500">Requests (24h)</p>
+        <p class="mt-1 text-3xl font-semibold tabular-nums" id="kpi-total">—</p>
+      </div>
+      <div class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+        <p class="text-xs text-slate-500">Fehler (24h)</p>
+        <p class="mt-1 text-3xl font-semibold tabular-nums text-rose-500" id="kpi-errors">—</p>
+      </div>
+      <div class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+        <p class="text-xs text-slate-500">Ø Latenz</p>
+        <p class="mt-1 text-3xl font-semibold tabular-nums" id="kpi-latency">—</p>
+      </div>
+      <div class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+        <p class="text-xs text-slate-500">Tokens (Comp.) 24h</p>
+        <p class="mt-1 text-3xl font-semibold tabular-nums" id="kpi-tokens">—</p>
+      </div>
+    </section>
+
+    <!-- Spokes -->
+    <section class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 lg:col-span-3">
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">GPU-Spokes</h2>
+        <span class="text-xs text-slate-400">Health-Check via /api/tags · /v1/models</span>
+      </div>
+      <div id="spokes" class="grid gap-3 md:grid-cols-2"></div>
+    </section>
+
+    <!-- Apps -->
+    <section class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 lg:col-span-2">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-3">Apps (24h)</h2>
+      <table class="w-full text-sm">
+        <thead class="text-left text-xs uppercase text-slate-400">
+          <tr><th class="py-2">App</th><th class="text-right">Requests</th><th class="text-right">Ø ms</th><th class="text-right">Errors</th><th class="text-right">Inflight</th></tr>
+        </thead>
+        <tbody id="apps-body" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
+      </table>
+    </section>
+
+    <!-- Top-Modelle -->
+    <section class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-3">Top Modelle (24h)</h2>
+      <ul id="models-list" class="space-y-2 text-sm"></ul>
+    </section>
+
+    <!-- Latenz-Histogramm -->
+    <section class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 lg:col-span-3">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-3">Latenz-Verteilung (1h)</h2>
+      <div id="latency-bars" class="space-y-2"></div>
+    </section>
+
+    <!-- Logs -->
+    <section class="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 lg:col-span-3">
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">Letzte 50 Requests</h2>
+        <span class="text-xs text-slate-400">Auto-Refresh alle 5s</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs font-mono">
+          <thead class="text-left text-slate-400">
+            <tr><th class="py-2">Zeit</th><th>App</th><th>Route</th><th>Model</th><th class="text-right">ms</th><th class="text-right">Status</th><th>Spoke</th></tr>
+          </thead>
+          <tbody id="logs-body" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="max-w-7xl mx-auto px-6 py-8 text-xs text-slate-400">
+    llm-router · read-only Dashboard · API-Doku unter <a class="underline" href="/docs">/docs</a>
+  </footer>
+
+  <script>
+    const fmtMs = (n) => n == null ? "—" : (n < 1000 ? n.toFixed(0) + " ms" : (n / 1000).toFixed(1) + " s");
+    const fmtNum = (n) => n == null ? "—" : new Intl.NumberFormat("de-DE").format(n);
+    const fmtUptime = (s) => {
+      if (s == null) return "—";
+      const d = Math.floor(s / 86400);
+      const h = Math.floor((s % 86400) / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      if (d) return `${d}d ${h}h`;
+      if (h) return `${h}h ${m}m`;
+      return `${m}m`;
+    };
+    const fmtTime = (epoch) => {
+      const d = new Date(epoch * 1000);
+      return d.toLocaleTimeString("de-DE", { hour12: false });
+    };
+    const statusBadge = (code) => {
+      const cls = code >= 500 ? "bg-rose-500/15 text-rose-600 dark:text-rose-400"
+        : code >= 400 ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+        : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400";
+      return `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${cls}">${code}</span>`;
+    };
+
+    async function refresh() {
+      try {
+        const [stats, logs] = await Promise.all([
+          fetch("/admin/stats").then(r => r.json()),
+          fetch("/admin/logs?limit=50").then(r => r.json()),
+        ]);
+
+        document.getElementById("version").textContent = "v" + (stats.version || "?");
+        document.getElementById("uptime").textContent = fmtUptime(stats.uptime_s);
+        document.getElementById("last-update").textContent = new Date().toLocaleTimeString("de-DE", { hour12: false });
+
+        const allOk = (stats.spokes || []).every(s => s.ok);
+        const anyOk = (stats.spokes || []).some(s => s.ok);
+        const dot = document.getElementById("status-dot");
+        const lbl = document.getElementById("status-label");
+        if (allOk) { dot.className = "w-2 h-2 rounded-full bg-emerald-500"; lbl.textContent = "alle Spokes erreichbar"; }
+        else if (anyOk) { dot.className = "w-2 h-2 rounded-full bg-amber-500"; lbl.textContent = "teilweise verfügbar"; }
+        else { dot.className = "w-2 h-2 rounded-full bg-rose-500"; lbl.textContent = "kein Spoke erreichbar"; }
+
+        const t = stats.totals_24h || {};
+        document.getElementById("kpi-total").textContent = fmtNum(t.total || 0);
+        document.getElementById("kpi-errors").textContent = fmtNum(t.errors || 0);
+        document.getElementById("kpi-latency").textContent = fmtMs(t.avg_ms);
+        document.getElementById("kpi-tokens").textContent = fmtNum(t.completion_tokens || 0);
+
+        // Spokes
+        const spokesEl = document.getElementById("spokes");
+        spokesEl.innerHTML = (stats.spokes || []).map(s => `
+          <div class="rounded-lg border ${s.ok ? "border-emerald-300/40 bg-emerald-50/40 dark:bg-emerald-900/10" : "border-rose-300/40 bg-rose-50/40 dark:bg-rose-900/10"} p-3">
+            <div class="flex items-center justify-between">
+              <p class="font-semibold text-sm">${s.name}</p>
+              <span class="text-[10px] uppercase font-bold ${s.ok ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}">${s.ok ? "online" : "offline"}</span>
+            </div>
+            <p class="text-xs text-slate-500 mt-1 font-mono">${s.url}</p>
+            ${s.models && s.models.length ? `<div class="mt-2 flex flex-wrap gap-1">${s.models.slice(0, 8).map(m => `<span class="text-[10px] rounded bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5">${m}</span>`).join("")}</div>` : ""}
+            ${s.error ? `<p class="text-xs text-rose-500 mt-2">${s.error}</p>` : ""}
+          </div>
+        `).join("") || `<div class="text-sm text-slate-500">Keine Spokes konfiguriert.</div>`;
+
+        // Apps
+        const appsBody = document.getElementById("apps-body");
+        const rl = stats.rate_limit_state || {};
+        const allApps = stats.by_app || [];
+        appsBody.innerHTML = allApps.length ? allApps.map(a => `
+          <tr>
+            <td class="py-2 font-medium">${a.app_id}</td>
+            <td class="text-right tabular-nums">${fmtNum(a.n)}</td>
+            <td class="text-right tabular-nums text-slate-500">${fmtMs(a.avg_ms)}</td>
+            <td class="text-right tabular-nums ${a.errors > 0 ? "text-rose-500" : "text-slate-500"}">${a.errors || 0}</td>
+            <td class="text-right tabular-nums text-slate-500">${(rl[a.app_id]?.in_flight ?? 0)}</td>
+          </tr>
+        `).join("") : `<tr><td colspan="5" class="py-4 text-center text-slate-400">Noch keine Requests.</td></tr>`;
+
+        // Modelle
+        const ml = document.getElementById("models-list");
+        const models = stats.top_models || [];
+        ml.innerHTML = models.length ? models.map(m => `
+          <li class="flex items-baseline justify-between gap-3">
+            <span class="font-mono text-xs truncate">${m.model}</span>
+            <span class="text-xs text-slate-500 tabular-nums">${fmtNum(m.n)} · ${fmtMs(m.avg_ms)}</span>
+          </li>
+        `).join("") : `<li class="text-slate-400 text-sm">Noch keine Modelle gesehen.</li>`;
+
+        // Latenz-Histogramm
+        const buckets = stats.latency_buckets_1h || [];
+        const max = Math.max(1, ...buckets.map(b => b.count));
+        const lb = document.getElementById("latency-bars");
+        lb.innerHTML = buckets.map(b => {
+          const pct = (b.count / max) * 100;
+          return `
+            <div class="grid grid-cols-[100px_1fr_60px] items-center gap-3 text-xs">
+              <span class="text-slate-500">${b.label}</span>
+              <div class="h-3 rounded bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                <div class="bar h-full bg-gradient-to-r from-indigo-500 to-fuchsia-500" style="width: ${pct}%"></div>
+              </div>
+              <span class="text-right tabular-nums">${fmtNum(b.count)}</span>
+            </div>
+          `;
+        }).join("");
+
+        // Logs
+        const lbody = document.getElementById("logs-body");
+        lbody.innerHTML = logs.length ? logs.map(l => `
+          <tr>
+            <td class="py-1.5 text-slate-500">${fmtTime(l.ts)}</td>
+            <td>${l.app_id}</td>
+            <td class="text-slate-600 dark:text-slate-300">${l.route}</td>
+            <td class="text-slate-500">${l.model || ""}</td>
+            <td class="text-right tabular-nums">${l.duration_ms}</td>
+            <td class="text-right">${statusBadge(l.http_status)}</td>
+            <td class="text-slate-500">${l.spoke || ""}</td>
+          </tr>
+        `).join("") : `<tr><td colspan="7" class="py-4 text-center text-slate-400">Noch keine Requests.</td></tr>`;
+
+      } catch (e) {
+        console.error(e);
+        document.getElementById("status-label").textContent = "Verbindung verloren";
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

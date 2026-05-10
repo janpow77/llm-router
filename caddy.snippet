@@ -1,0 +1,49 @@
+# Caddy-Snippet für llm-router (NICHT scharfgestellt — Stub für DNS-Aktivierung)
+#
+# Sobald router.flowaudit.de auf den CCX23 zeigt, kann dieser Block in die
+# Caddyfile aufgenommen werden. Voraussetzung: caddy + llm-router teilen das
+# `cockpit`-Docker-Netz.
+#
+# Schutz für /admin/*: Basic-Auth (siehe `caddy hash-password`).
+# Die Routing-API (/api/*, /v1/*) bleibt offen, da X-App-Id + Rate-Limit
+# vom Router selbst durchgesetzt werden.
+
+router.flowaudit.de {
+    encode zstd gzip
+
+    # Admin-UI + Admin-API: Basic-Auth
+    @admin path /admin* /docs* /openapi.json
+    handle @admin {
+        basic_auth {
+            # Beispiel: Username "admin", Passwort-Hash via `caddy hash-password`
+            # admin $2a$14$XXXXXXXXXXXXXXXXXXXXXXX
+        }
+        reverse_proxy llm-router:7842
+    }
+
+    # Healthcheck offen
+    handle /health {
+        reverse_proxy llm-router:7842
+    }
+
+    # Eigentliche LLM-Endpunkte: kein zusätzliches Auth — der Router macht das
+    handle /api/* {
+        reverse_proxy llm-router:7842
+    }
+    handle /v1/* {
+        reverse_proxy llm-router:7842
+    }
+
+    # Default 404
+    handle {
+        respond "Not Found" 404
+    }
+
+    log {
+        output file /var/log/caddy/llm-router.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+        format json
+    }
+}

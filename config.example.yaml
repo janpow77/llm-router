@@ -1,0 +1,60 @@
+server:
+  host: 0.0.0.0
+  port: 7842
+  version: 0.1.0
+
+# Authentifizierung
+auth:
+  require_app_id: true       # Header X-App-Id MUSS gesetzt sein
+  allow_default: true        # Fallback auf "default"-App wenn Header fehlt (statt 401)
+  api_key_required: false    # Wenn true: X-Api-Key wird validiert (sofern in App-Config gesetzt)
+
+# Bekannte Apps
+apps:
+  - id: default
+    description: "Fallback für Tests / unbekannte Clients"
+    api_key: null
+    rate_limit_rpm: 30
+    max_concurrent: 2
+
+  - id: auditworkshop
+    description: "Workshop-Demo (Hetzner CCX23)"
+    api_key: null
+    rate_limit_rpm: 120
+    max_concurrent: 8
+
+  - id: audit_designer
+    description: "Hauptanwendung (NUC)"
+    api_key: null
+    rate_limit_rpm: 240
+    max_concurrent: 16
+
+  - id: flowinvoice
+    description: "Rechnungsverarbeitung (NUC)"
+    api_key: null
+    rate_limit_rpm: 120
+    max_concurrent: 6
+
+  - id: test
+    description: "Manuelle curl-Tests"
+    api_key: null
+    rate_limit_rpm: 60
+    max_concurrent: 2
+
+# GPU-Spokes (Backends)
+spokes:
+  - name: nuc-egpu
+    url: http://100.102.132.11:11434
+    scheme: ollama
+    weight: 1
+    timeout_s: 300
+
+# Routing-Regeln (erstes Match gewinnt; "*" = alle Modelle)
+routes:
+  - model_glob: "*"
+    spoke: nuc-egpu
+
+# Metrics-Storage
+metrics:
+  db_path: /data/metrics.db
+  retention_days: 30
