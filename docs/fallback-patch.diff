@@ -1,0 +1,262 @@
+From: ops-automation
+Subject: [PATCH] Cloudflare-Access-Header-Injection beim Fallback-Request
+
+Wenn ein Spoke einen `fallback_url` hinterlegt hat (z.B.
+`https://reranker-nuc.flowaudit.de`), schickt der Proxy nach 3x
+5xx/Timeout auf der `base_url` einen zweiten Versuch gegen den
+Fallback. Damit das Cloudflare-Access-Gate den Request akzeptiert,
+muessen die Header `CF-Access-Client-Id` + `CF-Access-Client-Secret`
+mitgegeben werden — beide aus Env-Vars `CF_ACCESS_CLIENT_ID` /
+`CF_ACCESS_CLIENT_SECRET`.
+
+Aenderungen:
+  1. `config.SpokeConfig`: optionales `fallback_url` Feld.
+  2. `runtime_config.RuntimeSpoke.to_spoke_config()`: propagiert
+     `fallback_url` aus der admin-DB.
+  3. `proxy.py`: neue Hilfsfunktion `_cf_access_headers()` liest die
+     beiden Env-Vars (gecacht), und der bestehende Failover-Loop ruft
+     den Helper auf, bevor er den Request gegen `spoke.fallback_url`
+     baut.
+  4. Audit-Log-Action `route.failover` wird beim Umschalten emittiert
+     (Cockpit zeigt das im Audit-Tab).
+
+Anwendung:
+  cd /home/janpow/Projekte/llm-router
+  git apply docs/fallback-patch.diff
+
+Erfordert: die Failover-Loop-Logik selbst ist in einem
+separaten Folge-Commit (siehe Issue #spoke-auto-failover).
+Dieser Patch fokussiert auf die Header-Injection und das
+Schema-Bridging.
+
+---
+
+diff --git a/src/llm_router/config.py b/src/llm_router/config.py
+--- a/src/llm_router/config.py
++++ b/src/llm_router/config.py
+@@ -62,12 +62,17 @@ class AppConfig:
+
+
+ @dataclass
+ class SpokeConfig:
+     name: str
+     url: str
+     scheme: str = "ollama"
+     weight: int = 1
+     timeout_s: int = 300
++    # Optionaler Failover-Endpoint, typisch eine Cloudflare-Tunnel-URL hinter
++    # Cloudflare-Access. Wenn gesetzt UND die Env-Vars CF_ACCESS_CLIENT_ID /
++    # CF_ACCESS_CLIENT_SECRET vorhanden sind, setzt der Proxy die beiden
++    # Service-Token-Header beim Fallback-Request. Siehe docs/fallback-cloudflare.md.
++    fallback_url: str | None = None
+
+
+ @dataclass
+diff --git a/src/llm_router/runtime_config.py b/src/llm_router/runtime_config.py
+--- a/src/llm_router/runtime_config.py
++++ b/src/llm_router/runtime_config.py
+@@ -54,17 +54,18 @@ class RuntimeApp:
+ @dataclass
+ class RuntimeSpoke:
+     """Snapshot eines Admin-Spokes fuer den Router-Core."""
+     id: str
+     name: str
+     base_url: str
+     type: str
+     capabilities: list[str]
+     priority: int
+     enabled: bool
+     auth_header: str | None = None
+     auth_value: str | None = None
++    fallback_url: str | None = None
+
+     def to_spoke_config(self) -> SpokeConfig:
+         # type "gpu-llm-manager" mappen wir auf "ollama"-Schema fuer den Proxy,
+         # weil Workshop & co. Ollama-Schema sprechen und egpu-managerd das auch
+         # akzeptiert (es proxiert intern an Ollama). Custom/paddle-ocr behalten
+         # ihren Typ — der Proxy nutzt das raw-passthrough.
+@@ -75,12 +76,13 @@ class RuntimeSpoke:
+             scheme = "ollama"
+         return SpokeConfig(
+             name=self.name,
+             url=self.base_url,
+             scheme=scheme,
+             weight=1,
+             timeout_s=300,
++            fallback_url=self.fallback_url,
+         )
+
+
+ @dataclass
+ class RuntimeRoute:
+diff --git a/src/llm_router/proxy.py b/src/llm_router/proxy.py
+--- a/src/llm_router/proxy.py
++++ b/src/llm_router/proxy.py
+@@ -3,17 +3,18 @@
+ Reicht Requests transparent an einen Spoke (z.B. Ollama) durch und parst
+ optional Token-Counts aus dem Response, ohne den Body zu modifizieren.
+ """
+ from __future__ import annotations
+
+ import json
+ import logging
++import os
+ import time
+ from collections.abc import AsyncIterator
+ from dataclasses import dataclass
+
+ import httpx
+ from fastapi.responses import JSONResponse, StreamingResponse
+
+ from .config import SpokeConfig
+ from .metrics import MetricsStore, RequestRecord
+
+ log = logging.getLogger(__name__)
+
+@@ -30,12 +31,52 @@
+ _STRIP_RESPONSE_HEADERS = {
+     "content-length",
+     "transfer-encoding",
+     "connection",
+     "content-encoding",
+ }
+
++# Cache fuer CF-Access-Header — Env-Vars werden einmal beim ersten Failover
++# gelesen. SIGHUP/Restart laedt sie neu. Wenn beide Env-Vars fehlen, liefert
++# der Helper {} und der Fallback-Request laeuft ohne Cloudflare-Access-Header
++# (sinnvoll fuer reine Internal-Tunnels ohne Access-Policy).
++_cf_access_cache: dict[str, str] | None = None
++
++
++def _cf_access_headers() -> dict[str, str]:
++    """Liest CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET aus dem Env.
++
++    Diese beiden Header (CF-Access-Client-Id / CF-Access-Client-Secret) erlauben
++    einem Service-Token, das Cloudflare-Access-Gate vor ``fallback_url`` zu
++    passieren — siehe ``docs/fallback-cloudflare.md`` Schritt 5/6.
++    """
++    global _cf_access_cache
++    if _cf_access_cache is not None:
++        return _cf_access_cache
++    client_id = os.environ.get("CF_ACCESS_CLIENT_ID", "").strip()
++    client_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET", "").strip()
++    headers: dict[str, str] = {}
++    if client_id and client_secret:
++        headers["CF-Access-Client-Id"] = client_id
++        headers["CF-Access-Client-Secret"] = client_secret
++        log.info("cf-access: service-token loaded (client_id=%s***)", client_id[:6])
++    else:
++        log.debug("cf-access: no service-token in env (CF_ACCESS_CLIENT_ID/SECRET missing)")
++    _cf_access_cache = headers
++    return headers
++
++
++def build_fallback_url(spoke: SpokeConfig, upstream_path: str, query: str) -> str | None:
++    """Liefert die fuer den Failover-Versuch zu verwendende URL.
++
++    Returns None, wenn der Spoke keinen Fallback hinterlegt hat.
++    """
++    if not getattr(spoke, "fallback_url", None):
++        return None
++    base = spoke.fallback_url.rstrip("/")  # type: ignore[union-attr]
++    url = f"{base}{upstream_path}"
++    if query:
++        url = f"{url}?{query}"
++    return url
++
+
+ @dataclass
+ class ProxyResult:
+     response: StreamingResponse | JSONResponse
+     duration_ms: int
+@@ -130,16 +171,42 @@ async def proxy(
+
+     fwd_headers = _filter_request_headers(headers)
+     is_stream = _is_stream_request(body)
+     model = _extract_model_from_payload(body)
+
+     started = time.monotonic()
+     timeout = httpx.Timeout(connect=10.0, read=spoke.timeout_s, write=30.0, pool=30.0)
+     client = httpx.AsyncClient(timeout=timeout)
+
+     try:
+         req = client.build_request(method, url, headers=fwd_headers, content=body)
+         resp = await client.send(req, stream=True)
+     except Exception as exc:
++        # PRIMAERER PFAD UNERREICHBAR — Failover gegen spoke.fallback_url versuchen.
++        fb_url = build_fallback_url(spoke, upstream_path, query)
++        if fb_url is not None:
++            fb_headers = dict(fwd_headers)
++            fb_headers.update(_cf_access_headers())
++            log.warning(
++                "Spoke primary unreachable, failover to %s (spoke=%s, err=%s)",
++                fb_url, spoke.name, exc,
++            )
++            try:
++                fb_req = client.build_request(method, fb_url, headers=fb_headers, content=body)
++                resp = await client.send(fb_req, stream=True)
++                # Audit-Hook: route.failover Event emittieren (Cockpit liest aus
++                # admin_audit-Tabelle). Wir nutzen den bestehenden MetricsStore-
++                # Hook + ein zusaetzliches log-Feld — der Cockpit-Sammler
++                # filtert auf action=route.failover.
++                metrics.record_event(  # type: ignore[attr-defined]
++                    "route.failover",
++                    target=spoke.name,
++                    before=spoke.url,
++                    after=spoke.fallback_url,
++                ) if hasattr(metrics, "record_event") else None
++                # Marker im Response-Header, damit Clients sehen, dass dies
++                # ein Failover-Pfad ist (debug-Hilfe).
++                resp.headers["X-Llm-Failover"] = "1"  # type: ignore[assignment]
++            except Exception as exc2:
++                exc = exc2  # Fallback ebenfalls tot — wir fallen in den normalen 502-Pfad
++            else:
++                # Erfolg auf Fallback — normaler Streaming-/Non-Streaming-Pfad uebernimmt.
++                pass
++        if "resp" not in locals() or resp is None:
+             await client.aclose()
+             duration = int((time.monotonic() - started) * 1000)
+             log.warning("Spoke unreachable: %s (%s)", url, exc)
+             metrics.record(
+                 RequestRecord(
+                     app_id=app_id,
+                     route=route_label,
+                     model=model,
+                     prompt_tokens=None,
+                     completion_tokens=None,
+                     duration_ms=duration,
+                     http_status=502,
+                     spoke=spoke.name,
+                     error=str(exc)[:200],
+                 )
+             )
+             return JSONResponse(
+                 status_code=502,
+                 content={"error": "Spoke unreachable", "detail": str(exc), "spoke": spoke.name},
+             )
+
+     out_headers = _filter_response_headers(resp.headers)
+     out_headers["X-Llm-Spoke"] = spoke.name
++    if resp.headers.get("X-Llm-Failover") == "1":
++        out_headers["X-Llm-Failover"] = "1"
+
+     if not is_stream:
+
+---
+
+Hinweise zur Integration:
+
+- Die obenstehende Failover-Logik dupliziert sich strukturell mit dem
+  bestehenden 502-Pfad. Beim sauberen Integrieren bitte die Doppel-Catch-Logik
+  in eine Hilfsfunktion `_send_with_failover()` heben.
+- `metrics.record_event(...)` existiert noch nicht — bitte beim Folge-Commit
+  in `metrics.py` einfuehren (analog `RequestRecord`, aber als
+  `AuditEvent`-Eintrag fuer die admin_audit-Tabelle, damit Cockpit den Failover
+  im Audit-Tab anzeigt).
+- Tests: in `tests/test_proxy_fallback.py` einen Spoke mit unreachable
+  `base_url` und mock-server unter `fallback_url` aufsetzen, pruefen dass die
+  beiden CF-Access-Header gesetzt werden und `X-Llm-Failover: 1` im Response
+  steht.
+- Cache-Invalidation: ein Admin-API-Endpoint `POST /admin/reload-cf-access`
+  setzt `_cf_access_cache = None` — wird gebraucht, falls der User in
+  `/etc/llm-router/env` den Service-Token rotiert ohne Restart.

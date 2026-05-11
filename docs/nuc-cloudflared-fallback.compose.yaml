@@ -1,0 +1,48 @@
+# NUC: Cloudflare-Tunnel-Hot-Backup fuer ML-Services
+# ----------------------------------------------------------------------------
+# Zweck:
+#   Wenn Tailscale auf der NUC ausfaellt, kann der llm-router auf CCX23
+#   die Spokes (ollama:11434, reranker-service:8004) nicht mehr ueber
+#   100.102.132.11 erreichen. Dieser Tunnel stellt eine zweite Bahn bereit:
+#   https://ollama-nuc.flowaudit.de      -> http://localhost:11434
+#   https://reranker-nuc.flowaudit.de    -> http://localhost:8004
+#   https://vision-nuc.flowaudit.de      -> http://localhost:8005  (optional)
+#
+# Sicherheit:
+#   Jede der drei Public-URLs ist via Cloudflare-Access (Self-Hosted)
+#   geschuetzt — nur Requests mit gueltigem `CF-Access-Client-Id` +
+#   `CF-Access-Client-Secret` Header passieren. Der llm-router setzt
+#   diese Header automatisch, wenn er auf `fallback_url` umschaltet.
+#
+# Standort:
+#   Diese Datei wird auf der NUC nach /home/janpow/Projekte/llm-router-fallback/
+#   gelegt und mit `docker compose -f nuc-cloudflared-fallback.compose.yaml up -d`
+#   gestartet. Bestehende Tunnels (audit_designer_cloudflared,
+#   auditworkshop-cloudflared) bleiben unangetastet — dies ist ein
+#   zusaetzlicher Tunnel mit eigenem Token.
+#
+# Token:
+#   TUNNEL_TOKEN_FALLBACK wird vom User in /etc/llm-router-fallback/.env
+#   eingetragen (siehe docs/fallback-cloudflare.md).
+# ----------------------------------------------------------------------------
+
+services:
+  cloudflared-fallback:
+    image: cloudflare/cloudflared:latest
+    container_name: nuc_ml_fallback_cloudflared
+    restart: always
+    # Wichtig: host-Network, damit der Tunnel direkt 127.0.0.1:11434 / :8004
+    # erreicht (ohne Bridge-Hop). Ollama hoert default nur auf localhost.
+    network_mode: host
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN_FALLBACK:?TUNNEL_TOKEN_FALLBACK required}
+    # Kein depends_on: ollama / reranker laufen ausserhalb dieses Compose-Files.
+    # Cloudflared retried selbststaendig wenn Backend nicht erreichbar.
+    healthcheck:
+      test: ["NONE"]   # cloudflared-Image hat keine Shell — analog zu den anderen Tunnels
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
