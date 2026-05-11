@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from ._model_aggregation import aggregate_openai_models
 from .deps import RouterContext, get_context, identify_app, route_for_model
 from .proxy import _extract_model_from_payload, proxy
 
@@ -176,19 +177,9 @@ async def openai_ocr(request: Request, ctx: RouterContext = Depends(get_context)
 
 @router.api_route("/v1/models", methods=["GET"])
 async def openai_models(request: Request, ctx: RouterContext = Depends(get_context)):
-    app = await identify_app(request, ctx)
-    spoke = route_for_model("")
-    if not spoke:
-        return JSONResponse(status_code=503, content={"error": "no spoke configured"})
-    return await proxy(
-        method="GET",
-        spoke=spoke,
-        upstream_path="/v1/models",
-        headers=dict(request.headers),
-        body=b"",
-        query=str(request.url.query or ""),
-        app_id=app.id,
-        metrics=ctx.metrics,
-        route_label="/v1/models",
-        response_kind="openai",
-    )
+    """Aggregiert /v1/models ueber alle Spokes (ollama-Spokes via /api/tags)."""
+    await identify_app(request, ctx)
+    merged = await aggregate_openai_models()
+    if not merged.get("data"):
+        return JSONResponse(status_code=503, content={"error": "no spoke reachable"})
+    return JSONResponse(content=merged, headers={"x-llm-aggregated": "true"})
