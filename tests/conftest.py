@@ -5,7 +5,16 @@ Spoke-Health-Loop ab — sonst scheitert der App-Import an fehlenden
 /data-Volumes.
 """
 import os
+import sys
 import tempfile
+from pathlib import Path
+
+# sys.path Bootstrap fuer Test-Module die llm_router importieren ohne
+# Editable-Install (zur Vermeidung des bekannten ModuleNotFoundError).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SRC = _REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 _TMP = tempfile.mkdtemp(prefix="llm-router-tests-")
 os.environ.setdefault("ADMIN_DB_PATH", f"{_TMP}/admin.db")

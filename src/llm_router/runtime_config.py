@@ -62,6 +62,10 @@ class RuntimeSpoke:
     enabled: bool
     auth_header: str | None = None
     auth_value: str | None = None
+    # Phase 3
+    status: str = "unknown"
+    source: str = "manual"
+    fallback_url: str | None = None
 
     def to_spoke_config(self) -> SpokeConfig:
         # type "gpu-llm-manager" mappen wir auf "ollama"-Schema fuer den Proxy,
@@ -77,6 +81,7 @@ class RuntimeSpoke:
             scheme=scheme,
             weight=1,
             timeout_s=300,
+            fallback_url=self.fallback_url,
         )
 
 
@@ -171,6 +176,9 @@ def reload_from_admin_db() -> RuntimeConfigSnapshot:
                     enabled=bool(row.enabled),
                     auth_header=row.auth_header,
                     auth_value=row.auth_value,
+                    status=row.status or "unknown",
+                    source=getattr(row, "source", None) or "manual",
+                    fallback_url=getattr(row, "fallback_url", None),
                 )
                 spokes_by_name[spk.name] = spk
                 spokes_by_id[spk.id] = spk
@@ -257,6 +265,16 @@ def spoke_by_name(name: str) -> SpokeConfig | None:
     return None
 
 
+def _spoke_is_routable(spoke: RuntimeSpoke) -> bool:
+    """Spoke darf in Routing aufgenommen werden wenn enabled + nicht offline.
+
+    'unknown' Status ist erlaubt (erster Health-Check noch nicht durch).
+    Dynamische Spokes mit abgelaufenem Heartbeat sind 'offline' — die
+    werden ueber den status-Filter ausgeschlossen.
+    """
+    return spoke.enabled and spoke.status != "offline"
+
+
 def route_for_model(model: str, capability: str = "llm") -> SpokeConfig | None:
     """Findet den passenden Spoke fuer ein Modell.
 
@@ -264,6 +282,9 @@ def route_for_model(model: str, capability: str = "llm") -> SpokeConfig | None:
     1. Admin-DB-Routes (priority asc, glob-match)
     2. Admin-DB-Spokes mit passender Capability (priority asc, enabled, online)
     3. YAML-Fallback
+
+    Offline-Spokes (status='offline' — typisch nach Heartbeat-Timeout fuer
+    dynamic Spokes) werden in Schritt 1/2 uebersprungen.
     """
     snap = _snapshot
 
@@ -274,14 +295,14 @@ def route_for_model(model: str, capability: str = "llm") -> SpokeConfig | None:
         if not fnmatch(model or "", rule.model_glob):
             continue
         spk = snap.spokes_by_id.get(rule.spoke_id)
-        if spk is not None and spk.enabled and capability in spk.capabilities:
+        if spk is not None and _spoke_is_routable(spk) and capability in spk.capabilities:
             return spk.to_spoke_config()
 
     # 2. Capability-basiertes Auto-Routing — nimm den Spoke mit niedrigster
-    # Priority, der die Capability bietet und enabled ist.
+    # Priority, der die Capability bietet und enabled+nicht offline ist.
     candidates = [
         s for s in snap.spokes_by_name.values()
-        if s.enabled and capability in s.capabilities
+        if _spoke_is_routable(s) and capability in s.capabilities
     ]
     if candidates:
         candidates.sort(key=lambda s: s.priority)

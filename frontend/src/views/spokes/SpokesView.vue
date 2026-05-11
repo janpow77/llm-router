@@ -124,6 +124,15 @@ async function doHealthCheck(s: Spoke) {
                 <span>Prio {{ s.priority }}</span>
                 <span>·</span>
                 <span>geprüft {{ relativeTime(s.last_check_at) }}</span>
+                <template v-if="s.source === 'dynamic'">
+                  <span>·</span>
+                  <Badge :variant="s.status === 'offline' ? 'red' : 'indigo'">dynamic</Badge>
+                  <span v-if="s.last_seen_at" class="text-[10px]">HB {{ relativeTime(s.last_seen_at) }}</span>
+                </template>
+                <template v-if="s.fallback_url">
+                  <span>·</span>
+                  <span class="text-[10px] font-mono" title="Fallback-URL fuer Auto-Failover">↳ {{ s.fallback_url }}</span>
+                </template>
               </div>
               <div v-if="s.capabilities?.length" class="flex flex-wrap gap-1 mt-2">
                 <Badge v-for="cap in s.capabilities" :key="cap" variant="indigo">{{ cap }}</Badge>
