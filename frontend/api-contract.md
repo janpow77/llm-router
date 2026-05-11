@@ -145,37 +145,71 @@ Frontend baut gegen genau diese Endpunkte. Bei Backend-Änderungen bitte hier zu
 
 ## Spokes (CRUD)
 
+Ein Spoke ist ein nachgeschalteter GPU-/LLM-/OCR-Workload. Mehrere
+Capabilities pro Spoke (LLM + Embedding + Compute z.B.). Routing matcht
+auf `capabilities` + Modell-Glob, sortiert nach `priority` (niedriger = bevorzugt).
+
+**Spoke-Typ (`type`):**
+- `ollama` — direkter Ollama-Server (kein Lease-Tracking). Health: `/api/tags`
+- `openai` — OpenAI-kompatibler Server (vLLM, llama.cpp, ...). Health: `/v1/models`
+- `gpu-llm-manager` — zentraler GPU-/LLM-Lifecycle-Manager (vormals
+  egpu-managerd). Verwaltet Modell-Swap, Lease, Multi-GPU auf NUC/evo/Desktop.
+  Health: `/api/status` (Fallback `/health`)
+- `paddle-ocr` — OCR-Workload. Health: `/health`
+- `custom` — beliebiger HTTP-Workload. Health: `/health`
+
+**Capabilities (`capabilities[]`):** `llm`, `embedding`, `ocr`, `compute`, `image-gen`
+
 ### `GET /admin/api/spokes`
 **Response (200):** `Spoke[]`
 ```json
 [
   {
     "id": "spk_...",
-    "name": "nuc-egpu",
-    "base_url": "http://100.102.132.11:11434",
-    "type": "ollama",
-    "status": "online",
-    "last_check_at": "...",
-    "models": ["qwen3:14b", "qwen3:8b", "nomic-embed-text"],
+    "name": "nuc-gpu-llm-manager",
+    "base_url": "http://100.102.132.11:7842",
+    "type": "gpu-llm-manager",
+    "capabilities": ["llm", "embedding", "compute"],
+    "tags": ["nuc", "gpu", "rtx5070ti", "egpu", "lifecycle"],
+    "priority": 50,
     "gpu_info": {
       "device": "NVIDIA GeForce RTX 5070 Ti",
       "vram_total_mb": 16384,
       "vram_used_mb": 14820,
-      "utilization_pct": 78
-    }
+      "util_pct": 78
+    },
+    "status": "online",
+    "last_check_at": "2026-05-11T01:50:26Z",
+    "last_error": null,
+    "enabled": true,
+    "models": ["qwen3:14b", "qwen3:8b", "nomic-embed-text"],
+    "created_at": "...",
+    "updated_at": "..."
   }
 ]
 ```
 
 ### `POST /admin/api/spokes`
-**Body:** `{ "name": "...", "base_url": "...", "type": "ollama"|"openai", "auth": { "api_key": "..." }? }`
+**Body:**
+```json
+{
+  "name": "evo-gpu-llm-manager",
+  "base_url": "http://100.81.4.99:7842",
+  "type": "gpu-llm-manager",
+  "capabilities": ["llm", "embedding", "compute"],
+  "tags": ["evo", "desktop", "rtx5070", "rtx5060"],
+  "priority": 60,
+  "auth": { "header": "Authorization", "value": "Bearer xyz" },
+  "enabled": true
+}
+```
 **Response (201):** `Spoke`
 
-### `PATCH /admin/api/spokes/{id}` — Partial update
+### `PATCH /admin/api/spokes/{id}` — Partial update (alle Felder optional)
 ### `DELETE /admin/api/spokes/{id}` — 204
 
 ### `POST /admin/api/spokes/{id}/health-check`
-**Response (200):** `Spoke` (updated `status` + `last_check_at`)
+**Response (200):** `Spoke` (updated `status` + `last_check_at` + `last_error`)
 
 ---
 
