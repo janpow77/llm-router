@@ -51,6 +51,8 @@ from .models import (
     SpokeCreate,
     SpokeOut,
     SpokeRegister,
+    SpokeTestConnectionRequest,
+    SpokeTestConnectionResponse,
     SpokeUpdate,
     app_row_to_out,
     audit_row_to_out,
@@ -275,6 +277,25 @@ async def spokes_create(
         log.info("Initial-Discovery fuer %s schlug fehl: %s", row.name, exc)
     session.refresh(row)
     return spoke_row_to_out(row, models=crud_spokes.list_models_for_spoke(session, row.id))
+
+
+@router.post(
+    "/spokes/test-connection",
+    response_model=SpokeTestConnectionResponse,
+)
+async def spokes_test_connection(
+    payload: SpokeTestConnectionRequest,
+    _=Depends(require_auth),
+) -> SpokeTestConnectionResponse:
+    """Test-Connection fuer einen Provider-Endpoint OHNE den Spoke anzulegen.
+
+    Macht einen HTTP-GET auf ``base_url + test_endpoint`` mit Timeout 5s
+    und versucht, eine Modell-Liste aus dem JSON zu extrahieren.
+    Werte werden nicht persistiert und nicht in Logs aufgenommen.
+    """
+    from .services.spoke_test import test_connection
+
+    return await test_connection(payload)
 
 
 @router.get("/spokes/{spoke_id}", response_model=SpokeOut)
