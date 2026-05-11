@@ -21,13 +21,20 @@ log = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT_S = 2.5
 
 
+_AGGREGATABLE_CAPS = {"llm", "embedding", "vision", "ocr", "rerank"}
+
+
 def _routable_llm_spokes() -> list[RuntimeSpoke]:
+    """Spokes mit Modell-Listen die der Router via /api/tags + /v1/models
+    aggregieren kann. Schliesst alle modell-tragenden Capabilities ein —
+    vision-service (vision/ocr) wird sonst von Clients nicht entdeckt.
+    """
     snap = snapshot()
     out: list[RuntimeSpoke] = []
     for spk in snap.spokes_by_name.values():
         if not spk.enabled or spk.status == "offline":
             continue
-        if "llm" not in spk.capabilities and "embedding" not in spk.capabilities:
+        if not (set(spk.capabilities) & _AGGREGATABLE_CAPS):
             continue
         out.append(spk)
     out.sort(key=lambda s: s.priority)
