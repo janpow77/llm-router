@@ -81,6 +81,35 @@ async def openai_embeddings(request: Request, ctx: RouterContext = Depends(get_c
     )
 
 
+@router.api_route("/v1/rerank", methods=["POST"])
+async def openai_rerank(request: Request, ctx: RouterContext = Depends(get_context)):
+    """Cross-Encoder-Reranking via reranker-service Spokes.
+
+    Erwartet Payload:
+      {"model": "<id>", "query": "...", "passages": ["..."], "top_k": ?, "return_documents": ?}
+    Antwort: ``{model, duration_ms, scores, ranking}``. Modell-Routing identisch
+    zu Embeddings — Spoke muss capability=``rerank`` haben.
+    """
+    app = await identify_app(request, ctx)
+    body = await request.body()
+    model = _extract_model_from_payload(body) or ""
+    spoke = route_for_model(model, capability="rerank")
+    if not spoke:
+        return JSONResponse(status_code=503, content={"error": "no rerank spoke configured"})
+    return await proxy(
+        method="POST",
+        spoke=spoke,
+        upstream_path="/v1/rerank",
+        headers=dict(request.headers),
+        body=body,
+        query=str(request.url.query or ""),
+        app_id=app.id,
+        metrics=ctx.metrics,
+        route_label="/v1/rerank",
+        response_kind="openai",
+    )
+
+
 @router.api_route("/v1/models", methods=["GET"])
 async def openai_models(request: Request, ctx: RouterContext = Depends(get_context)):
     app = await identify_app(request, ctx)
