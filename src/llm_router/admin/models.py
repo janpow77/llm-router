@@ -276,6 +276,44 @@ class SpokeUpdate(BaseModel):
     fallback_url: str | None = None
 
 
+class SpokeTestConnectionRequest(BaseModel):
+    """Request fuer den ``/spokes/test-connection``-Endpoint.
+
+    Wird vom Admin-Frontend benutzt um einen Provider-Endpoint zu pruefen,
+    BEVOR der Spoke angelegt wird. Werte werden NICHT persistiert.
+    """
+
+    base_url: str = Field(min_length=1, max_length=512)
+    auth_header: str | None = Field(default=None, max_length=120)
+    auth_value: str | None = Field(default=None, max_length=4096)
+    test_endpoint: str | None = Field(default=None, max_length=256)
+
+    @field_validator("base_url")
+    @classmethod
+    def _strip_url(cls, v: str) -> str:
+        return v.strip().rstrip("/")
+
+    @field_validator("test_endpoint")
+    @classmethod
+    def _strip_endpoint(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        # erlaube relative Pfade (mit/ohne fuehrenden Slash)
+        return v if v.startswith("/") else f"/{v}"
+
+
+class SpokeTestConnectionResponse(BaseModel):
+    ok: bool
+    status: int | None = None
+    models_count: int | None = None
+    sample_models: list[str] = Field(default_factory=list)
+    latency_ms: int | None = None
+    error: str | None = None
+
+
 class SpokeRegister(BaseModel):
     """Payload fuer den dynamischen Spoke-Registrierungs-Endpoint.
 
