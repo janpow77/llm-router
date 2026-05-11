@@ -8,7 +8,9 @@ auf den Router umbiegen.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
+from ._model_aggregation import aggregate_ollama_tags
 from .deps import RouterContext, get_context, identify_app, route_for_model
 from .proxy import proxy
 
@@ -120,24 +122,19 @@ async def ollama_embed(request: Request, ctx: RouterContext = Depends(get_contex
 
 @router.api_route("/api/tags", methods=["GET"])
 async def ollama_tags(request: Request, ctx: RouterContext = Depends(get_context)):
-    app = await identify_app(request, ctx)
-    spoke = route_for_model("")
-    if not spoke:
-        from fastapi.responses import JSONResponse
+    """Aggregiert /api/tags ueber alle llm-capable Spokes.
 
-        return JSONResponse(status_code=503, content={"error": "no spoke configured"})
-    return await proxy(
-        method="GET",
-        spoke=spoke,
-        upstream_path="/api/tags",
-        headers=dict(request.headers),
-        body=b"",
-        query=str(request.url.query or ""),
-        app_id=app.id,
-        metrics=ctx.metrics,
-        route_label="/api/tags",
-        response_kind="ollama",
-    )
+    Vorher: nur Default-Spoke proxiert — Clients sahen nur einen Bruchteil der
+    Modelle, was bei Workshop's `_resolve_model`-Fallback zu Mis-Routing
+    fuehrte. Jetzt: alle routable llm-Spokes werden parallel abgefragt,
+    Modelle nach Name dedupliziert. ``_spoke``/``_spokes`` Metadaten zeigen
+    welcher Spoke das Modell bedient.
+    """
+    await identify_app(request, ctx)
+    merged = await aggregate_ollama_tags()
+    if not merged.get("models"):
+        return JSONResponse(status_code=503, content={"error": "no spoke reachable"})
+    return JSONResponse(content=merged, headers={"x-llm-aggregated": "true"})
 
 
 @router.api_route("/api/show", methods=["POST"])
