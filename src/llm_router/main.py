@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__
+from . import __version__, runtime_config
 from .admin import admin_api_router
 from .admin.router import shutdown_admin, startup_admin
 from .config import load_config
@@ -48,8 +48,13 @@ async def lifespan(app: FastAPI):
         len(config.spokes),
         config.metrics.db_path,
     )
-    # Bootstrap: YAML-Spokes + GPU-Defaults werden in admin-DB importiert
+    # YAML als Fallback in den runtime_config-Store einhaengen.
+    runtime_config.set_yaml_fallback(config)
+    # Bootstrap: YAML-Spokes + GPU-Defaults werden in admin-DB importiert.
     await startup_admin(router_config=config)
+    # Runtime-Snapshot aus der admin-DB neu laden — danach ist Hybrid C aktiv:
+    # admin-DB ist authoritative, YAML ist Fallback.
+    runtime_config.reload_from_admin_db()
     try:
         yield
     finally:
@@ -88,6 +93,30 @@ async def release_rate_limit(request: Request, call_next):
         acquired = getattr(request.state, "app_acquired", False)
         if ctx and app_id and acquired:
             await ctx.limiter.release(app_id)
+
+
+@app.middleware("http")
+async def runtime_config_reload_after_admin_mutation(request: Request, call_next):
+    """Invalidiert den Runtime-Config-Snapshot nach jeder erfolgreichen Mutation.
+
+    Greift NUR fuer ``/admin/api/*`` mit Methode POST/PATCH/PUT/DELETE und
+    Status 2xx. So wird nach jedem Apps/Spokes/Routes/Quotas/Settings-Change
+    der naechste Live-Request bereits den neuen Stand sehen.
+    """
+    response = await call_next(request)
+    try:
+        path = request.url.path or ""
+        if (
+            path.startswith("/admin/api/")
+            and request.method in ("POST", "PATCH", "PUT", "DELETE")
+            and 200 <= response.status_code < 300
+            # Auth-Login/Logout aendern keinen Routing-State — auslassen
+            and not path.startswith("/admin/api/auth/")
+        ):
+            runtime_config.reload_from_admin_db()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Runtime-Config-Reload nach Admin-Mutation fehlgeschlagen: %s", exc)
+    return response
 
 
 @app.get("/health")

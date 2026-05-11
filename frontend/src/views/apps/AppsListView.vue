@@ -12,6 +12,7 @@ import AppFormModal from './AppFormModal.vue'
 import AppDetailDrawer from './AppDetailDrawer.vue'
 import { listApps, createApp, patchApp, deleteApp, rotateAppKey, toggleAppEnabled } from '../../api/apps'
 import { listModels } from '../../api/models'
+import { useConfirmStore } from '../../stores/confirm'
 import { useToastStore } from '../../stores/toast'
 import type { App, ModelInfo } from '../../api/types'
 import { formatNumber, relativeTime } from '../../utils/format'
@@ -21,6 +22,7 @@ const apps = ref<App[]>([])
 const models = ref<ModelInfo[]>([])
 const loading = ref(true)
 const toast = useToastStore()
+const confirm = useConfirmStore()
 
 const formOpen = ref(false)
 const formApp = ref<App | null>(null)
@@ -60,6 +62,15 @@ function openDetail(app: App) {
 }
 
 async function onSave(data: Partial<App>) {
+  const isUpdate = !!formApp.value
+  const ok = await confirm.ask({
+    title: isUpdate ? 'App-Änderungen speichern?' : 'Neue App anlegen?',
+    message: isUpdate
+      ? `"${formApp.value?.name}" wird aktualisiert. Änderungen wirken sofort live.`
+      : `App "${data.name}" wird angelegt. Wirkt sofort live im Routing.`,
+  })
+  if (!ok) return
+
   saving.value = true
   try {
     if (formApp.value) {
@@ -77,6 +88,13 @@ async function onSave(data: Partial<App>) {
 }
 
 async function doToggle(app: App) {
+  const action = app.enabled ? 'deaktivieren' : 'aktivieren'
+  const ok = await confirm.ask({
+    title: `App ${action}?`,
+    message: `"${app.name}" wird ${action}. ${app.enabled ? 'Eingehende Requests werden ab sofort abgewiesen.' : 'App akzeptiert wieder Requests.'}`,
+    danger: app.enabled,
+  })
+  if (!ok) return
   try {
     await toggleAppEnabled(app.id)
     toast.success(`${app.name} ${app.enabled ? 'deaktiviert' : 'aktiviert'}.`)

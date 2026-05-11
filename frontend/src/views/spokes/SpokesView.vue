@@ -8,6 +8,7 @@ import ConfirmDialog from '../../components/shared/ConfirmDialog.vue'
 import EmptyState from '../../components/shared/EmptyState.vue'
 import SpokeFormModal from './SpokeFormModal.vue'
 import { listSpokes, createSpoke, patchSpoke, deleteSpoke, spokeHealthCheck } from '../../api/spokes'
+import { useConfirmStore } from '../../stores/confirm'
 import { useToastStore } from '../../stores/toast'
 import type { Spoke } from '../../api/types'
 import { formatBytes, relativeTime, formatPercent } from '../../utils/format'
@@ -21,6 +22,7 @@ const saving = ref(false)
 const confirmDelete = ref<Spoke | null>(null)
 const checkingId = ref<string | null>(null)
 const toast = useToastStore()
+const confirm = useConfirmStore()
 
 async function load() {
   loading.value = true
@@ -38,6 +40,15 @@ function openCreate() { formSpoke.value = null; formOpen.value = true }
 function openEdit(s: Spoke) { formSpoke.value = s; formOpen.value = true }
 
 async function onSave(data: Partial<Spoke>) {
+  const isUpdate = !!formSpoke.value
+  const ok = await confirm.ask({
+    title: isUpdate ? 'Spoke speichern?' : 'Neuen Spoke anlegen?',
+    message: isUpdate
+      ? `"${formSpoke.value?.name}" wird aktualisiert. Routing-Änderungen wirken sofort live.`
+      : `Spoke "${data.name}" (${data.type}) wird angelegt und steht ab sofort im Routing zur Verfügung.`,
+  })
+  if (!ok) return
+
   saving.value = true
   try {
     if (formSpoke.value) {

@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from .deps import RouterContext, get_context, identify_app
+from .deps import RouterContext, get_context, identify_app, route_for_model
 from .proxy import _extract_model_from_payload, proxy
 
 router = APIRouter(tags=["openai"])
@@ -20,7 +20,7 @@ async def openai_chat(request: Request, ctx: RouterContext = Depends(get_context
     app = await identify_app(request, ctx)
     body = await request.body()
     model = _extract_model_from_payload(body) or ""
-    spoke = ctx.config.route_for_model(model)
+    spoke = route_for_model(model)
     if not spoke:
         return JSONResponse(status_code=503, content={"error": "no spoke configured"})
     return await proxy(
@@ -42,7 +42,7 @@ async def openai_completions(request: Request, ctx: RouterContext = Depends(get_
     app = await identify_app(request, ctx)
     body = await request.body()
     model = _extract_model_from_payload(body) or ""
-    spoke = ctx.config.route_for_model(model)
+    spoke = route_for_model(model)
     if not spoke:
         return JSONResponse(status_code=503, content={"error": "no spoke configured"})
     return await proxy(
@@ -64,7 +64,7 @@ async def openai_embeddings(request: Request, ctx: RouterContext = Depends(get_c
     app = await identify_app(request, ctx)
     body = await request.body()
     model = _extract_model_from_payload(body) or ""
-    spoke = ctx.config.route_for_model(model)
+    spoke = route_for_model(model, capability="embedding")
     if not spoke:
         return JSONResponse(status_code=503, content={"error": "no spoke configured"})
     return await proxy(
@@ -84,7 +84,7 @@ async def openai_embeddings(request: Request, ctx: RouterContext = Depends(get_c
 @router.api_route("/v1/models", methods=["GET"])
 async def openai_models(request: Request, ctx: RouterContext = Depends(get_context)):
     app = await identify_app(request, ctx)
-    spoke = ctx.config.route_for_model("")
+    spoke = route_for_model("")
     if not spoke:
         return JSONResponse(status_code=503, content={"error": "no spoke configured"})
     return await proxy(

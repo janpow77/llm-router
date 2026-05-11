@@ -38,11 +38,19 @@ log = logging.getLogger(__name__)
 # Priorität: niedriger = bevorzugt. gpu-llm-manager priorisiert vor direktem
 # Ollama, weil er Lease-Tracking + Cross-Host-Routing macht.
 DEFAULT_SPOKES: list[dict] = [
+    # Wichtig: gpu-llm-manager spricht NICHT die Ollama-/OpenAI-API selbst.
+    # Er ist ein Lifecycle-/Lease-Coordinator (siehe egpu-managerd /api/status,
+    # /api/gpu/acquire usw.). Daher capability = ["compute"] — er wird nicht
+    # fuer LLM-/Embedding-Inference geroutet, sondern erscheint in der UI als
+    # Verwaltungs-Backend fuer GPU-Workloads.
+    #
+    # Die Ollama-Spokes (auf gleichem Host) bedienen LLM + Embedding und
+    # bekommen die niedrigere Routing-Priority fuer diese Capabilities.
     {
         "name": "nuc-gpu-llm-manager",
         "base_url": "http://100.102.132.11:7842",
         "type": "gpu-llm-manager",
-        "capabilities": ["llm", "embedding", "compute"],
+        "capabilities": ["compute"],
         "tags": ["nuc", "gpu", "rtx5070ti", "egpu", "lifecycle"],
         "priority": 50,
     },
@@ -51,15 +59,15 @@ DEFAULT_SPOKES: list[dict] = [
         "base_url": "http://100.102.132.11:11434",
         "type": "ollama",
         "capabilities": ["llm", "embedding"],
-        "tags": ["nuc", "gpu", "rtx5070ti", "ollama", "direct"],
+        "tags": ["nuc", "gpu", "rtx5070ti", "ollama"],
         "priority": 100,
     },
     {
         "name": "evo-gpu-llm-manager",
         "base_url": "http://100.81.4.99:7842",
         "type": "gpu-llm-manager",
-        "capabilities": ["llm", "embedding", "compute"],
-        "tags": ["evo", "desktop", "gpu", "rtx5070", "rtx5060", "multi-gpu"],
+        "capabilities": ["compute"],
+        "tags": ["evo", "desktop", "rtx5070", "rtx5060", "multi-gpu"],
         "priority": 60,
     },
     {
@@ -67,7 +75,7 @@ DEFAULT_SPOKES: list[dict] = [
         "base_url": "http://100.81.4.99:11434",
         "type": "ollama",
         "capabilities": ["llm", "embedding"],
-        "tags": ["evo", "desktop", "ollama", "direct"],
+        "tags": ["evo", "desktop", "ollama"],
         "priority": 110,
     },
 ]

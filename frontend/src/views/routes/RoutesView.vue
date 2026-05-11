@@ -7,6 +7,7 @@ import EmptyState from '../../components/shared/EmptyState.vue'
 import ConfirmDialog from '../../components/shared/ConfirmDialog.vue'
 import { listRoutes, createRoute, patchRoute, deleteRoute } from '../../api/routes'
 import { listSpokes } from '../../api/spokes'
+import { useConfirmStore } from '../../stores/confirm'
 import { useToastStore } from '../../stores/toast'
 import type { RouteRule, Spoke } from '../../api/types'
 import { extractError } from '../../api/client'
@@ -14,6 +15,7 @@ import { extractError } from '../../api/client'
 const routes = ref<RouteRule[]>([])
 const spokes = ref<Spoke[]>([])
 const toast = useToastStore()
+const confirm = useConfirmStore()
 const newGlob = ref('')
 const newSpokeId = ref('')
 const confirmDelete = ref<RouteRule | null>(null)
@@ -33,6 +35,12 @@ const sortedRoutes = computed(() => [...routes.value].sort((a, b) => a.priority 
 
 async function addRoute() {
   if (!newGlob.value || !newSpokeId.value) return
+  const spokeName = spokes.value.find(s => s.id === newSpokeId.value)?.name || newSpokeId.value
+  const ok = await confirm.ask({
+    title: 'Neue Route anlegen?',
+    message: `Glob "${newGlob.value.trim()}" → Spoke "${spokeName}". Wirkt sofort live im Routing.`,
+  })
+  if (!ok) return
   try {
     const max = routes.value.reduce((m, r) => Math.max(m, r.priority), 0)
     await createRoute({
@@ -63,6 +71,12 @@ async function move(route: RouteRule, dir: 'up' | 'down') {
 }
 
 async function toggleEnabled(route: RouteRule) {
+  const ok = await confirm.ask({
+    title: route.enabled ? 'Route deaktivieren?' : 'Route aktivieren?',
+    message: `"${route.model_glob}" wird ${route.enabled ? 'aus dem Routing entfernt' : 'wieder in das Routing aufgenommen'}.`,
+    danger: route.enabled,
+  })
+  if (!ok) return
   try {
     await patchRoute(route.id, { enabled: !route.enabled })
     await load()
@@ -70,6 +84,12 @@ async function toggleEnabled(route: RouteRule) {
 }
 
 async function updateGlob(route: RouteRule, value: string) {
+  if (value === route.model_glob) { editingId.value = null; return }
+  const ok = await confirm.ask({
+    title: 'Glob speichern?',
+    message: `"${route.model_glob}" → "${value}". Wirkt sofort live.`,
+  })
+  if (!ok) { editingId.value = null; return }
   try {
     await patchRoute(route.id, { model_glob: value })
     toast.success('Glob aktualisiert.')
@@ -79,6 +99,16 @@ async function updateGlob(route: RouteRule, value: string) {
 }
 
 async function updateSpoke(route: RouteRule, spokeId: string) {
+  if (spokeId === route.spoke_id) return
+  const newSpokeName = spokes.value.find(s => s.id === spokeId)?.name || spokeId
+  const ok = await confirm.ask({
+    title: 'Ziel-Spoke ändern?',
+    message: `"${route.model_glob}" → "${newSpokeName}" (neuer Spoke). Wirkt sofort live.`,
+  })
+  if (!ok) {
+    await load()
+    return
+  }
   try {
     await patchRoute(route.id, { spoke_id: spokeId })
     toast.success('Spoke geändert.')

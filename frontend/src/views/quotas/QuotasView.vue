@@ -6,6 +6,7 @@ import ProgressBar from '../../components/shared/ProgressBar.vue'
 import EmptyState from '../../components/shared/EmptyState.vue'
 import { listApps } from '../../api/apps'
 import { getQuota, patchQuota } from '../../api/quotas'
+import { useConfirmStore } from '../../stores/confirm'
 import { useToastStore } from '../../stores/toast'
 import type { App, QuotaUsage } from '../../api/types'
 import { formatNumber } from '../../utils/format'
@@ -21,6 +22,7 @@ interface Row {
 
 const rows = ref<Row[]>([])
 const toast = useToastStore()
+const confirm = useConfirmStore()
 const loading = ref(false)
 
 async function load() {
@@ -53,6 +55,11 @@ function markDirty(row: Row) {
 }
 
 async function saveRow(row: Row) {
+  const ok = await confirm.ask({
+    title: `Quota für "${row.app.name}" speichern?`,
+    message: `RPM=${row.edit.rpm}, concurrent=${row.edit.concurrent}, daily_tokens=${formatNumber(row.edit.daily_tokens)}. Wirkt sofort live.`,
+  })
+  if (!ok) return
   row.saving = true
   try {
     await patchQuota(row.app.id, row.edit)

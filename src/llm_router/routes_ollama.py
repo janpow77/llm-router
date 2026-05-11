@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
-from .deps import RouterContext, get_context, identify_app
+from .deps import RouterContext, get_context, identify_app, route_for_model
 from .proxy import proxy
 
 router = APIRouter(tags=["ollama"])
@@ -26,7 +26,7 @@ async def ollama_generate(request: Request, ctx: RouterContext = Depends(get_con
     app = await identify_app(request, ctx)
     body = await request.body()
     model = _model_for_request(body) or ""
-    spoke = ctx.config.route_for_model(model)
+    spoke = route_for_model(model)
     if not spoke:
         from fastapi.responses import JSONResponse
 
@@ -50,7 +50,7 @@ async def ollama_chat(request: Request, ctx: RouterContext = Depends(get_context
     app = await identify_app(request, ctx)
     body = await request.body()
     model = _model_for_request(body) or ""
-    spoke = ctx.config.route_for_model(model)
+    spoke = route_for_model(model)
     if not spoke:
         from fastapi.responses import JSONResponse
 
@@ -74,7 +74,7 @@ async def ollama_embeddings(request: Request, ctx: RouterContext = Depends(get_c
     app = await identify_app(request, ctx)
     body = await request.body()
     model = _model_for_request(body) or ""
-    spoke = ctx.config.route_for_model(model)
+    spoke = route_for_model(model, capability="embedding")
     if not spoke:
         from fastapi.responses import JSONResponse
 
@@ -99,7 +99,7 @@ async def ollama_embed(request: Request, ctx: RouterContext = Depends(get_contex
     app = await identify_app(request, ctx)
     body = await request.body()
     model = _model_for_request(body) or ""
-    spoke = ctx.config.route_for_model(model)
+    spoke = route_for_model(model, capability="embedding")
     if not spoke:
         from fastapi.responses import JSONResponse
 
@@ -121,7 +121,7 @@ async def ollama_embed(request: Request, ctx: RouterContext = Depends(get_contex
 @router.api_route("/api/tags", methods=["GET"])
 async def ollama_tags(request: Request, ctx: RouterContext = Depends(get_context)):
     app = await identify_app(request, ctx)
-    spoke = ctx.config.route_for_model("")
+    spoke = route_for_model("")
     if not spoke:
         from fastapi.responses import JSONResponse
 
@@ -144,7 +144,7 @@ async def ollama_tags(request: Request, ctx: RouterContext = Depends(get_context
 async def ollama_show(request: Request, ctx: RouterContext = Depends(get_context)):
     app = await identify_app(request, ctx)
     body = await request.body()
-    spoke = ctx.config.route_for_model(_model_for_request(body) or "")
+    spoke = route_for_model(_model_for_request(body) or "")
     if not spoke:
         from fastapi.responses import JSONResponse
 
@@ -166,7 +166,7 @@ async def ollama_show(request: Request, ctx: RouterContext = Depends(get_context
 @router.api_route("/api/version", methods=["GET"])
 async def ollama_version(request: Request, ctx: RouterContext = Depends(get_context)):
     app = await identify_app(request, ctx)
-    spoke = ctx.config.route_for_model("")
+    spoke = route_for_model("")
     if not spoke:
         from fastapi.responses import JSONResponse
 

@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { Save, Server, Folder, Clock, Tag } from 'lucide-vue-next'
 import Card from '../../components/shared/Card.vue'
 import { getSettings, patchSettings } from '../../api/settings'
+import { useConfirmStore } from '../../stores/confirm'
 import { useToastStore } from '../../stores/toast'
 import type { Settings } from '../../api/types'
 import { formatUptime } from '../../utils/format'
@@ -13,6 +14,7 @@ const form = ref({ log_retention_days: 30, default_rpm: 60, default_concurrent: 
 const dirty = ref(false)
 const saving = ref(false)
 const toast = useToastStore()
+const confirm = useConfirmStore()
 
 async function load() {
   try {
@@ -29,6 +31,11 @@ onMounted(load)
 function markDirty() { dirty.value = true }
 
 async function save() {
+  const ok = await confirm.ask({
+    title: 'System-Einstellungen speichern?',
+    message: `Log-Retention=${form.value.log_retention_days} Tage, Default-Quotas (rpm=${form.value.default_rpm}, concurrent=${form.value.default_concurrent}, tokens/d=${form.value.default_daily_tokens.toLocaleString()}). Wirkt sofort live.`,
+  })
+  if (!ok) return
   saving.value = true
   try {
     await patchSettings({
