@@ -8,18 +8,21 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .admin import admin_api_router
+from .admin.router import shutdown_admin, startup_admin
 from .config import load_config
 from .deps import RouterContext
 from .metrics import MetricsStore
 from .proxy import spoke_health
 from .ratelimit import RateLimiter
-from .routes_admin import router as admin_router
 from .routes_ollama import router as ollama_router
 from .routes_openai import router as openai_router
 
@@ -45,8 +48,13 @@ async def lifespan(app: FastAPI):
         len(config.spokes),
         config.metrics.db_path,
     )
-    yield
-    log.info("llm-router stoppt.")
+    # Bootstrap: YAML-Spokes + GPU-Defaults werden in admin-DB importiert
+    await startup_admin(router_config=config)
+    try:
+        yield
+    finally:
+        await shutdown_admin()
+        log.info("llm-router stoppt.")
 
 
 app = FastAPI(
@@ -111,4 +119,32 @@ async def unhandled_exception(request: Request, exc: Exception):
 
 app.include_router(ollama_router)
 app.include_router(openai_router)
-app.include_router(admin_router)
+app.include_router(admin_api_router)
+
+
+# Vollwertige Admin-SPA (Vue 3 Build) unter /admin/
+# WICHTIG: Reihenfolge — admin_api_router (oben) MUSS vor dem Catch-All
+# definiert sein, damit /admin/api/* nicht in den SPA-Fallback faellt.
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend_dist"
+if (_FRONTEND_DIR / "index.html").exists():
+    if (_FRONTEND_DIR / "assets").exists():
+        app.mount(
+            "/admin/assets",
+            StaticFiles(directory=_FRONTEND_DIR / "assets"),
+            name="admin-assets",
+        )
+
+    @app.get("/admin", include_in_schema=False)
+    @app.get("/admin/", include_in_schema=False)
+    async def _admin_root():
+        return FileResponse(_FRONTEND_DIR / "index.html")
+
+    @app.get("/admin/{full_path:path}", include_in_schema=False)
+    async def _admin_spa(full_path: str):
+        # Konkrete Datei (favicon.ico, vite.svg etc.) ausliefern, sonst SPA-Fallback
+        candidate = _FRONTEND_DIR / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND_DIR / "index.html")
+else:
+    log.warning("Admin-Frontend nicht gefunden unter %s — UI nicht verfuegbar", _FRONTEND_DIR)

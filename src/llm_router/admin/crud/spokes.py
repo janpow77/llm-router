@@ -1,6 +1,7 @@
 """CRUD-Funktionen fuer Spokes."""
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -25,11 +26,30 @@ def _serialize_for_audit(row: SpokeRow) -> dict:
         "name": row.name,
         "base_url": row.base_url,
         "type": row.type,
+        "capabilities": _decode_list(row.capabilities, ["llm"]),
+        "tags": _decode_list(row.tags, []),
+        "priority": row.priority,
         "enabled": bool(row.enabled),
         "auth_header": row.auth_header,
         # Wert NICHT loggen, kann Secret enthalten
         "auth_value_set": bool(row.auth_value),
     }
+
+
+def _decode_list(raw: str | None, default: list) -> list:
+    if not raw:
+        return list(default)
+    try:
+        out = json.loads(raw)
+        return out if isinstance(out, list) else list(default)
+    except (TypeError, ValueError):
+        return list(default)
+
+
+def _encode_list(values: list | None) -> str | None:
+    if values is None:
+        return None
+    return json.dumps(list(values))
 
 
 def list_spokes(session: Session) -> list[SpokeRow]:
@@ -58,6 +78,9 @@ def create_spoke(session: Session, payload: SpokeCreate, *, ip: str | None = Non
         name=payload.name,
         base_url=payload.base_url,
         type=payload.type,
+        capabilities=_encode_list(payload.capabilities) or '["llm"]',
+        tags=_encode_list(payload.tags) or "[]",
+        priority=payload.priority,
         auth_header=payload.auth.header if payload.auth else None,
         auth_value=payload.auth.value if payload.auth else None,
         status="unknown",
@@ -101,6 +124,12 @@ def update_spoke(session: Session, spoke_id: str, patch: SpokeUpdate, *, ip: str
         row.base_url = patch.base_url.rstrip("/")
     if patch.type is not None:
         row.type = patch.type
+    if patch.capabilities is not None:
+        row.capabilities = _encode_list(patch.capabilities)
+    if patch.tags is not None:
+        row.tags = _encode_list(patch.tags)
+    if patch.priority is not None:
+        row.priority = patch.priority
     if patch.auth is not None:
         row.auth_header = patch.auth.header
         row.auth_value = patch.auth.value

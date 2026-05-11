@@ -1,9 +1,10 @@
-<script setup lang="ts" generic="T extends Record<string, unknown>">
+<script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ChevronUp, ChevronDown } from 'lucide-vue-next'
 
-interface Column<R> {
-  key: keyof R | string
+type Row = Record<string, unknown>
+interface Column {
+  key: string
   label: string
   sortable?: boolean
   align?: 'left' | 'right' | 'center'
@@ -11,15 +12,15 @@ interface Column<R> {
 }
 
 const props = defineProps<{
-  columns: Column<T>[]
-  rows: T[]
-  rowKey?: (row: T) => string | number
+  columns: Column[]
+  rows: Row[]
+  rowKey?: (_row: Row) => string | number
 }>()
 
 const sortKey = ref<string | null>(null)
 const sortDir = ref<'asc' | 'desc'>('asc')
 
-function toggleSort(col: Column<T>) {
+function toggleSort(col: Column) {
   if (col.sortable === false) return
   if (sortKey.value === String(col.key)) {
     sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
@@ -34,16 +35,16 @@ const sorted = computed(() => {
   const key = sortKey.value
   const dir = sortDir.value === 'asc' ? 1 : -1
   return [...props.rows].sort((a, b) => {
-    const av = (a as Record<string, unknown>)[key]
-    const bv = (b as Record<string, unknown>)[key]
+    const av = a[key] as unknown
+    const bv = b[key] as unknown
     if (av === bv) return 0
     if (av === null || av === undefined) return 1
     if (bv === null || bv === undefined) return -1
-    return av > bv ? dir : -dir
+    return (av as number) > (bv as number) ? dir : -dir
   })
 })
 
-function rowKey(row: T, idx: number): string | number {
+function getRowKey(row: Row, idx: number): string | number {
   return props.rowKey ? props.rowKey(row) : idx
 }
 </script>
@@ -78,7 +79,7 @@ function rowKey(row: T, idx: number): string | number {
       <tbody>
         <tr
           v-for="(row, idx) in sorted"
-          :key="rowKey(row, idx)"
+          :key="getRowKey(row, idx)"
           class="border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50 dark:hover:bg-slate-900/40 transition-colors"
         >
           <td

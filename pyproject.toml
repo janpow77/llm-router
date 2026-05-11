@@ -17,6 +17,8 @@ dependencies = [
     "pydantic>=2.9",
     "pyyaml>=6.0",
     "starlette>=0.40",
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.20",
 ]
 
 [project.optional-dependencies]

@@ -27,6 +27,9 @@ export default [
       'vue/html-indent': 'off',
       'vue/attributes-order': 'off',
       'vue/html-closing-bracket-newline': 'off',
+      'vue/multiline-html-element-content-newline': 'off',
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
     },
   },
   {

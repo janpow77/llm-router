@@ -1,4 +1,29 @@
 # syntax=docker/dockerfile:1.6
+
+# ----------------------------------------------------------------------------
+# Stage 1: Frontend-Build
+# Baut das Vue-3-Admin-Dashboard und stellt /app/frontend_dist bereit.
+# Idempotent: braucht nur frontend/package*.json + frontend/src/.
+# ----------------------------------------------------------------------------
+FROM node:20-alpine AS frontend-build
+
+WORKDIR /work
+
+# Lockfile vor src kopieren — Layer-Cache nutzt npm install nur bei Lock-Aenderungen.
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+
+# Quellen + Build
+COPY frontend/ ./
+RUN npm run build
+
+# Sanity: dist/index.html muss da sein. Wenn nicht: Build-Fehler frueh aufdecken.
+RUN test -f dist/index.html || (echo "frontend build produced no dist/index.html" >&2 && exit 1)
+
+
+# ----------------------------------------------------------------------------
+# Stage 2: Python-Runtime mit FastAPI + statisch eingebackenem Frontend
+# ----------------------------------------------------------------------------
 FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -22,6 +47,11 @@ RUN pip install --upgrade pip \
 
 # Default-Config wird via Volume gemountet, ggf. fällt das auf example zurück
 COPY config.example.yaml /app/config.example.yaml
+
+# Admin-SPA: aus Stage 1 kopiert. Garantiert vorhanden, kein optional.
+# main.py haelt zusaetzlich einen Soft-Fallback bereit, falls jemand das
+# Verzeichnis manuell leert (Container startet, nur Admin-API reachable).
+COPY --from=frontend-build /work/dist /app/frontend_dist
 
 EXPOSE 7842
 

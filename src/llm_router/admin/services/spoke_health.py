@@ -39,8 +39,18 @@ async def _ping_spoke(spoke: SpokeRow, timeout_s: float = DEFAULT_TIMEOUT_S) -> 
     if not base:
         return "offline", "no base_url", None
 
+    # Endpoint je nach Spoke-Typ:
+    #   openai           → /v1/models    (OpenAI-Standard)
+    #   gpu-llm-manager  → /api/status   (egpu-managerd-API), Fallback /health
+    #   paddle-ocr       → /health       (Konvention)
+    #   custom           → /health       (Best-Effort)
+    #   ollama (default) → /api/tags
     if spoke.type == "openai":
         url = f"{base}/v1/models"
+    elif spoke.type == "gpu-llm-manager":
+        url = f"{base}/api/status"
+    elif spoke.type in ("paddle-ocr", "custom"):
+        url = f"{base}/health"
     else:
         url = f"{base}/api/tags"
 
@@ -52,6 +62,12 @@ async def _ping_spoke(spoke: SpokeRow, timeout_s: float = DEFAULT_TIMEOUT_S) -> 
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             resp = await client.get(url, headers=headers)
         if resp.status_code >= 400:
+            # gpu-llm-manager: bei 404 auf /api/status auf /health fallen
+            if spoke.type == "gpu-llm-manager" and resp.status_code == 404:
+                async with httpx.AsyncClient(timeout=timeout_s) as client:
+                    fb = await client.get(f"{base}/health", headers=headers)
+                if fb.status_code < 400:
+                    return "online", None, None
             return "offline", f"HTTP {resp.status_code}", None
         try:
             data = resp.json()
@@ -66,7 +82,7 @@ async def _ping_spoke(spoke: SpokeRow, timeout_s: float = DEFAULT_TIMEOUT_S) -> 
 
 
 def _normalize_models(spoke_type: str, payload: dict) -> list[dict]:
-    """Normalisiert die Modell-Antwort beider Schemas zu einer einheitlichen Liste."""
+    """Normalisiert die Modell-Antwort der Schemas zu einer einheitlichen Liste."""
     if not isinstance(payload, dict):
         return []
     items: list[dict] = []
@@ -75,6 +91,21 @@ def _normalize_models(spoke_type: str, payload: dict) -> list[dict]:
             if not isinstance(entry, dict):
                 continue
             items.append({"name": entry.get("id"), "raw": entry})
+    elif spoke_type == "gpu-llm-manager":
+        # egpu-managerd /api/status liefert Pipelines mit "models"-Feld pro
+        # Pipeline. Wir sammeln die Modelle aller Pipelines und deduplizieren.
+        seen: set[str] = set()
+        for pipeline in payload.get("pipelines") or []:
+            if not isinstance(pipeline, dict):
+                continue
+            for m in pipeline.get("models") or []:
+                name = m if isinstance(m, str) else (m.get("name") if isinstance(m, dict) else None)
+                if name and name not in seen:
+                    seen.add(name)
+                    items.append({"name": name, "raw": pipeline})
+    elif spoke_type in ("paddle-ocr", "custom"):
+        # /health-Schema variiert — keine Modell-Liste sinnvoll
+        return []
     else:  # ollama
         for entry in payload.get("models") or []:
             if not isinstance(entry, dict):

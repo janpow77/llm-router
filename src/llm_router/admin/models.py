@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import Column, ForeignKey, Integer, Real, String, Text
+from sqlalchemy import REAL, Column, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -43,6 +43,14 @@ class SpokeRow(Base):
     name = Column(String, unique=True, nullable=False)
     base_url = Column(String, nullable=False)
     type = Column(String, nullable=False, default="ollama")
+    # Workload-Capabilities (JSON-Array: llm, embedding, ocr, compute, ...).
+    capabilities = Column(Text, nullable=True)
+    # Frei wählbare Tags (JSON-Array, z.B. ["gpu","nuc","rtx5070ti"]).
+    tags = Column(Text, nullable=True)
+    # Discovery-Snapshot ({device, vram_total_mb, vram_used_mb, util_pct}).
+    gpu_info = Column(Text, nullable=True)
+    # Routing-Priorität: niedriger = bevorzugt.
+    priority = Column(Integer, nullable=False, default=100)
     auth_header = Column(String, nullable=True)
     auth_value = Column(String, nullable=True)
     status = Column(String, nullable=False, default="unknown")
@@ -60,7 +68,7 @@ class ModelRow(Base):
     name = Column(String, nullable=False)
     spoke_id = Column(String, ForeignKey("admin_spokes.id", ondelete="CASCADE"), nullable=False)
     spoke_name = Column(String, nullable=False)
-    size_gb = Column(Real, nullable=True)
+    size_gb = Column(REAL, nullable=True)
     context_length = Column(Integer, nullable=True)
     quantization = Column(String, nullable=True)
     discovered_at = Column(String, nullable=False)
@@ -179,10 +187,33 @@ class SpokeAuth(BaseModel):
     value: str
 
 
+# Bekannte Spoke-Typen.
+#   - "ollama":          direkter Ollama-Server (z.B. http://host:11434)
+#   - "openai":          OpenAI-kompatibler Server (eigener oder vLLM/llama.cpp)
+#   - "gpu-llm-manager": zentraler GPU-/LLM-Lifecycle-Manager (vormals
+#                        "egpu-manager"). Verwaltet Modell-Swap, Lease,
+#                        Multi-GPU auf NUC/evo/Desktop.
+#   - "paddle-ocr":      OCR-Workload (Paddle / RapidOCR / etc.)
+#   - "custom":          beliebiger HTTP-Workload, Capabilities frei waehlbar
+SpokeKind = Literal["ollama", "openai", "gpu-llm-manager", "paddle-ocr", "custom"]
+# Capabilities: ein Spoke kann mehrere Workload-Typen gleichzeitig anbieten.
+SpokeCapability = Literal["llm", "embedding", "ocr", "compute", "image-gen"]
+
+
+class GpuInfo(BaseModel):
+    device: str | None = None
+    vram_total_mb: int | None = None
+    vram_used_mb: int | None = None
+    util_pct: float | None = None
+
+
 class SpokeCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     base_url: str = Field(min_length=1)
-    type: Literal["ollama", "openai"] = "ollama"
+    type: SpokeKind = "ollama"
+    capabilities: list[SpokeCapability] = Field(default_factory=lambda: ["llm"])
+    tags: list[str] = Field(default_factory=list)
+    priority: int = Field(default=100, ge=0, le=10_000)
     auth: SpokeAuth | None = None
     enabled: bool = True
 
@@ -195,7 +226,10 @@ class SpokeCreate(BaseModel):
 class SpokeUpdate(BaseModel):
     name: str | None = None
     base_url: str | None = None
-    type: Literal["ollama", "openai"] | None = None
+    type: SpokeKind | None = None
+    capabilities: list[SpokeCapability] | None = None
+    tags: list[str] | None = None
+    priority: int | None = Field(default=None, ge=0, le=10_000)
     auth: SpokeAuth | None = None
     enabled: bool | None = None
 
@@ -205,6 +239,10 @@ class SpokeOut(BaseModel):
     name: str
     base_url: str
     type: str
+    capabilities: list[str] = Field(default_factory=lambda: ["llm"])
+    tags: list[str] = Field(default_factory=list)
+    priority: int = 100
+    gpu_info: GpuInfo | None = None
     status: str
     last_check_at: datetime | None = None
     last_error: str | None = None
@@ -342,12 +380,38 @@ def app_row_to_out(row: AppRow, request_count_today: int = 0) -> AppOut:
     )
 
 
+def _decode_json_list(raw: str | None, default: list) -> list:
+    if not raw:
+        return list(default)
+    try:
+        out = json.loads(raw)
+        return out if isinstance(out, list) else list(default)
+    except (TypeError, ValueError):
+        return list(default)
+
+
+def _decode_gpu_info(raw: str | None) -> GpuInfo | None:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return GpuInfo(**data)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
 def spoke_row_to_out(row: SpokeRow, models: list[str] | None = None) -> SpokeOut:
     return SpokeOut(
         id=row.id,
         name=row.name,
         base_url=row.base_url,
         type=row.type,
+        capabilities=_decode_json_list(row.capabilities, ["llm"]),
+        tags=_decode_json_list(row.tags, []),
+        priority=row.priority or 100,
+        gpu_info=_decode_gpu_info(row.gpu_info),
         status=row.status,
         last_check_at=_parse_dt(row.last_check_at) if row.last_check_at else None,
         last_error=row.last_error,

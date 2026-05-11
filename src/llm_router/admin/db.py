@@ -52,22 +52,32 @@ def _ensure_parent_dir(db_url: str) -> None:
 
 
 def _build_engine(db_url: str) -> Engine:
-    """Erzeugt eine SQLAlchemy-Engine mit sinnvollen SQLite-Defaults."""
-    connect_args: dict = {}
-    if db_url.startswith("sqlite"):
-        connect_args["check_same_thread"] = False
-    eng = create_engine(
-        db_url,
-        connect_args=connect_args,
-        future=True,
-        pool_pre_ping=True,
-    )
+    """Erzeugt eine SQLAlchemy-Engine mit sinnvollen SQLite-Defaults.
 
-    if db_url.startswith("sqlite"):
+    Fuer ``sqlite:///:memory:`` nutzen wir StaticPool, damit alle Sessions
+    die selbe In-Memory-DB sehen (ansonsten wuerde jede neue Connection
+    eine separate DB anlegen).
+    """
+    is_sqlite = db_url.startswith("sqlite")
+    is_memory = is_sqlite and (":memory:" in db_url or db_url == "sqlite://")
+
+    connect_args: dict = {}
+    engine_kwargs: dict = {"future": True, "pool_pre_ping": True}
+    if is_sqlite:
+        connect_args["check_same_thread"] = False
+    if is_memory:
+        from sqlalchemy.pool import StaticPool
+        engine_kwargs["poolclass"] = StaticPool
+
+    eng = create_engine(db_url, connect_args=connect_args, **engine_kwargs)
+
+    if is_sqlite:
         @event.listens_for(eng, "connect")
         def _set_sqlite_pragmas(dbapi_connection, _connection_record):
             cur = dbapi_connection.cursor()
-            cur.execute("PRAGMA journal_mode=WAL")
+            # WAL ergibt bei :memory: keinen Sinn — ueberspringen
+            if not is_memory:
+                cur.execute("PRAGMA journal_mode=WAL")
             cur.execute("PRAGMA synchronous=NORMAL")
             cur.execute("PRAGMA foreign_keys=ON")
             cur.close()
@@ -100,7 +110,11 @@ def init_db(db_url: str | None = None, force: bool = False) -> Engine:
 def _apply_migrations(eng: Engine) -> None:
     """Spielt alle ``*.sql``-Dateien in ``migrations/`` aus.
 
-    Idempotent durch Verwendung von ``CREATE TABLE IF NOT EXISTS``.
+    Idempotent: ``CREATE TABLE IF NOT EXISTS`` wird unveraendert ausgefuehrt;
+    bei ``ALTER TABLE ADD COLUMN`` wird ein ``duplicate column``-Fehler
+    abgefangen (SQLite vor 3.35 kennt kein ``ADD COLUMN IF NOT EXISTS``).
+    Jedes Statement wird einzeln ausgefuehrt, damit ein einzelner
+    no-op-Fehler die Folge-Statements nicht abreisst.
     """
     migration_dir = Path(__file__).parent / "migrations"
     if not migration_dir.exists():
@@ -115,10 +129,42 @@ def _apply_migrations(eng: Engine) -> None:
         cur = raw.cursor()
         for f in files:
             sql = f.read_text(encoding="utf-8")
-            cur.executescript(sql)
+            for stmt in _split_sql_statements(sql):
+                if not stmt.strip():
+                    continue
+                try:
+                    cur.execute(stmt)
+                except Exception as exc:  # noqa: BLE001
+                    msg = str(exc).lower()
+                    # Idempotenz fuer ADD COLUMN: ueberspringen wenn schon da.
+                    if "duplicate column" in msg or "already exists" in msg:
+                        log.debug("Migration-Skip (idempotent): %s", msg)
+                        continue
+                    log.error("Migration fehlgeschlagen in %s: %s", f.name, exc)
+                    raise
         raw.commit()
     finally:
         raw.close()
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    """Naive Split an Semikolons. Funktioniert fuer unsere Migrationen ohne
+    eingebettete Strings mit ``;``. Falls das je gebraucht wird, lieber
+    sqlparse einsetzen.
+    """
+    out: list[str] = []
+    buf: list[str] = []
+    for line in sql.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--") or not stripped:
+            continue
+        buf.append(line)
+        if stripped.endswith(";"):
+            out.append("\n".join(buf))
+            buf = []
+    if buf:
+        out.append("\n".join(buf))
+    return out
 
 
 def get_engine() -> Engine:

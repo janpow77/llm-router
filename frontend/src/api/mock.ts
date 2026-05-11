@@ -74,28 +74,42 @@ const APPS: App[] = [
 
 const SPOKES: Spoke[] = [
   {
-    id: 'spk_nuc_egpu',
-    name: 'nuc-egpu',
-    base_url: 'http://100.102.132.11:11434',
-    type: 'ollama',
+    id: 'spk_nuc_gpu_llm_manager',
+    name: 'nuc-gpu-llm-manager',
+    base_url: 'http://100.102.132.11:7842',
+    type: 'gpu-llm-manager',
+    capabilities: ['llm', 'embedding', 'compute'],
+    tags: ['nuc', 'gpu', 'rtx5070ti', 'egpu', 'lifecycle'],
+    priority: 50,
     status: 'online',
+    enabled: true,
     last_check_at: minutesAgo(0.5),
+    last_error: null,
+    created_at: minutesAgo(60),
+    updated_at: minutesAgo(0.5),
     models: ['qwen3:14b', 'qwen3:8b', 'nomic-embed-text', 'llama3.2:3b'],
     gpu_info: {
       device: 'NVIDIA GeForce RTX 5070 Ti',
       vram_total_mb: 16384,
       vram_used_mb: 14820,
-      utilization_pct: 78,
+      util_pct: 78,
     },
   },
   {
-    id: 'spk_hetzner_ccx23',
-    name: 'hetzner-ccx23',
-    base_url: 'http://10.0.0.5:11434',
-    type: 'ollama',
-    status: 'degraded',
-    last_check_at: minutesAgo(2),
-    models: ['qwen3:14b'],
+    id: 'spk_evo_gpu_llm_manager',
+    name: 'evo-gpu-llm-manager',
+    base_url: 'http://100.81.4.99:7842',
+    type: 'gpu-llm-manager',
+    capabilities: ['llm', 'embedding', 'compute'],
+    tags: ['evo', 'desktop', 'gpu', 'rtx5070', 'rtx5060', 'multi-gpu'],
+    priority: 60,
+    status: 'unknown',
+    enabled: true,
+    last_check_at: minutesAgo(15),
+    last_error: null,
+    created_at: minutesAgo(60),
+    updated_at: minutesAgo(15),
+    models: [],
     gpu_info: null,
   },
 ]
@@ -187,7 +201,7 @@ const HEALTH: HealthInfo = {
   status: 'ok',
   version: '0.1.0',
   started_at: hoursAgo(38),
-  spokes_health: SPOKES.map(s => ({ spoke_id: s.id, status: s.status, last_check_at: s.last_check_at })),
+  spokes_health: SPOKES.map(s => ({ spoke_id: s.id, status: s.status, last_check_at: s.last_check_at ?? now() })),
 }
 
 const SETTINGS: Settings = {
@@ -283,13 +297,21 @@ export const mock = {
   // spokes
   listSpokes: () => delay([...state.spokes]),
   createSpoke: (data: Partial<Spoke>): Promise<Spoke> => {
+    const ts = now()
     const spoke: Spoke = {
       id: `spk_${Date.now()}`,
       name: data.name || 'unnamed',
       base_url: data.base_url || '',
-      type: data.type || 'ollama',
-      status: 'offline',
-      last_check_at: now(),
+      type: data.type || 'gpu-llm-manager',
+      capabilities: data.capabilities || ['llm'],
+      tags: data.tags || [],
+      priority: data.priority ?? 100,
+      status: 'unknown',
+      enabled: data.enabled ?? true,
+      last_check_at: ts,
+      last_error: null,
+      created_at: ts,
+      updated_at: ts,
       models: [],
       gpu_info: null,
     }

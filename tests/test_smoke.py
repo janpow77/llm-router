@@ -65,39 +65,47 @@ def test_health_no_spokes_reachable(app, monkeypatch):
     assert isinstance(body["spokes"], list)
 
 
-def test_admin_stats(app):
+def test_admin_api_health_open(app):
+    """Health-Endpoint ist ohne Auth erreichbar."""
     with TestClient(app) as client:
-        r = client.get("/admin/stats")
+        r = client.get("/admin/api/health")
     assert r.status_code == 200
     body = r.json()
-    assert "totals_24h" in body
-    assert "by_app" in body
-    assert "spokes" in body
+    assert body["status"] == "ok"
+    assert "version" in body
+    assert "spokes_health" in body
 
 
-def test_admin_apps(app):
+def test_admin_api_requires_auth(app):
+    """Geschuetzter Endpoint liefert 401 ohne Bearer."""
     with TestClient(app) as client:
-        r = client.get("/admin/apps")
-    assert r.status_code == 200
-    apps = r.json()
-    ids = [a["id"] for a in apps]
-    assert "default" in ids
-    assert "test" in ids
+        r = client.get("/admin/api/apps")
+    assert r.status_code == 401
 
 
-def test_admin_logs_initial_empty(app):
+def test_admin_api_login_and_apps(app):
+    """Login mit Test-Passwort + authentifizierter Apps-Call."""
     with TestClient(app) as client:
-        r = client.get("/admin/logs?limit=10")
+        login = client.post("/admin/api/auth/login", json={"password": "test-password"})
+        assert login.status_code == 200, login.text
+        token = login.json()["token"]
+        r = client.get("/admin/api/apps", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
-    assert r.json() == []
+    assert isinstance(r.json(), list)
 
 
-def test_admin_ui_html(app):
+def test_admin_api_dashboard(app):
     with TestClient(app) as client:
-        r = client.get("/admin/")
+        token = client.post(
+            "/admin/api/auth/login", json={"password": "test-password"}
+        ).json()["token"]
+        r = client.get(
+            "/admin/api/dashboard", headers={"Authorization": f"Bearer {token}"}
+        )
     assert r.status_code == 200
-    assert "<html" in r.text.lower()
-    assert "llm-router" in r.text.lower()
+    body = r.json()
+    assert "requests_today" in body
+    assert "active_spokes" in body
 
 
 def test_root_redirects_to_admin(app):
@@ -105,15 +113,6 @@ def test_root_redirects_to_admin(app):
         r = client.get("/", follow_redirects=False)
     assert r.status_code in (302, 307)
     assert "/admin" in r.headers.get("location", "")
-
-
-def test_metrics_prometheus_format(app):
-    with TestClient(app) as client:
-        r = client.get("/admin/metrics")
-    assert r.status_code == 200
-    text = r.text
-    assert "llm_router_requests_total" in text
-    assert "llm_router_errors_total" in text
 
 
 def test_unknown_app_falls_back_to_default(app, monkeypatch):
@@ -156,8 +155,9 @@ def test_unknown_app_falls_back_to_default(app, monkeypatch):
     assert r.status_code in (200, 502, 503), f"unexpected status {r.status_code}: {r.text}"
 
 
-def test_require_app_id_off_allows_no_header(app):
+def test_admin_api_paths_no_app_id_header(app):
+    """Admin-API darf ohne X-App-Id aufgerufen werden — die App-ID ist nur fuer
+    durchgereichte LLM-Calls relevant, nicht fuer Verwaltungsendpoints."""
     with TestClient(app) as client:
-        # /admin/* braucht keine App-ID
-        r = client.get("/admin/spokes")
+        r = client.get("/admin/api/health")
     assert r.status_code == 200
