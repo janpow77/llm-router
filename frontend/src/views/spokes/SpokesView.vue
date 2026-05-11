@@ -146,7 +146,12 @@ async function doHealthCheck(s: Spoke) {
             <button class="grid place-items-center h-7 w-7 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-indigo-600" :class="checkingId === s.id ? 'animate-pulse-soft' : ''" :disabled="checkingId === s.id" title="Health-Check" @click="doHealthCheck(s)">
               <HeartPulse :size="14" />
             </button>
-            <button class="grid place-items-center h-7 w-7 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100" title="Bearbeiten" @click="openEdit(s)">
+            <button
+              class="grid place-items-center h-7 w-7 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              :disabled="s.source === 'dynamic'"
+              :title="s.source === 'dynamic' ? 'Dynamisch registriert — bearbeite stattdessen den Spoke-Agent' : 'Bearbeiten'"
+              @click="s.source !== 'dynamic' && openEdit(s)"
+            >
               <Pencil :size="14" />
             </button>
             <button class="grid place-items-center h-7 w-7 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-red-600" title="Löschen" @click="confirmDelete = s">

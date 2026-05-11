@@ -205,3 +205,136 @@ def test_failover_on_connection_error(monkeypatch, metrics):
 
     state = _breaker_get(spoke.name)
     assert state.consecutive_failures == 1
+
+
+def test_cf_access_headers_injected_on_fallback(monkeypatch, metrics):
+    """Wenn CF_ACCESS_CLIENT_ID/SECRET gesetzt sind, taucht beim fallback-Call
+    der ``CF-Access-Client-Id``-Header im Request auf.
+    """
+    from llm_router.proxy import _cf_access_cache_reset
+
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "id-abc")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "secret-xyz")
+    _cf_access_cache_reset()
+
+    captured_headers: list[dict[str, str]] = []
+    original_build = _MockClient.build_request
+
+    def _capture_build(self, method, url, headers=None, content=None):
+        captured_headers.append(dict(headers or {}))
+        return original_build(self, method, url, headers=headers, content=content)
+
+    monkeypatch.setattr(_MockClient, "build_request", _capture_build)
+
+    mock = _install_mock(monkeypatch)
+    mock.behaviors["primary.example"] = [503]
+    mock.behaviors["fallback.example"] = [_MockResp(200)]
+
+    spoke = _make_spoke()
+    resp = asyncio.run(_call(spoke, metrics))
+    assert resp.status_code == 200
+    # Zwei Requests: primary (ohne CF-Header), fallback (mit CF-Header).
+    assert len(captured_headers) == 2
+    primary_headers = {k.lower(): v for k, v in captured_headers[0].items()}
+    fallback_headers = {k.lower(): v for k, v in captured_headers[1].items()}
+    assert "cf-access-client-id" not in primary_headers
+    assert fallback_headers.get("cf-access-client-id") == "id-abc"
+    assert fallback_headers.get("cf-access-client-secret") == "secret-xyz"
+    _cf_access_cache_reset()
+
+
+def test_cf_access_headers_absent_when_env_missing(monkeypatch, metrics):
+    """Ohne CF_ACCESS-Env-Vars werden auch beim fallback keine CF-Header gesetzt."""
+    from llm_router.proxy import _cf_access_cache_reset
+
+    monkeypatch.delenv("CF_ACCESS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("CF_ACCESS_CLIENT_SECRET", raising=False)
+    _cf_access_cache_reset()
+
+    captured_headers: list[dict[str, str]] = []
+    original_build = _MockClient.build_request
+
+    def _capture_build(self, method, url, headers=None, content=None):
+        captured_headers.append(dict(headers or {}))
+        return original_build(self, method, url, headers=headers, content=content)
+
+    monkeypatch.setattr(_MockClient, "build_request", _capture_build)
+
+    mock = _install_mock(monkeypatch)
+    mock.behaviors["primary.example"] = [503]
+    mock.behaviors["fallback.example"] = [_MockResp(200)]
+
+    spoke = _make_spoke()
+    asyncio.run(_call(spoke, metrics))
+    # Bei keinem Request darf der Header gesetzt sein.
+    for headers in captured_headers:
+        keys_lc = {k.lower() for k in headers}
+        assert "cf-access-client-id" not in keys_lc
+        assert "cf-access-client-secret" not in keys_lc
+
+
+def test_recovery_via_fallback_successes_and_probe(monkeypatch, metrics):
+    """Recovery-Pfad: nach _FAILOVER_THRESHOLD Fehlern + _RECOVERY_THRESHOLD
+    erfolgreichen fallback-Aufrufen wird primary geprobed; bei 200 schliesst
+    der Breaker und ``using_fallback`` wird False.
+    """
+    mock = _install_mock(monkeypatch)
+    spoke = _make_spoke()
+
+    # _FAILOVER_THRESHOLD 503er auf primary, jeder mit erfolgreichem fallback-Retry.
+    mock.behaviors["primary.example"] = [503] * _FAILOVER_THRESHOLD
+    mock.behaviors["fallback.example"] = [_MockResp(200)] * (
+        _FAILOVER_THRESHOLD + _RECOVERY_THRESHOLD
+    )
+    for _ in range(_FAILOVER_THRESHOLD):
+        asyncio.run(_call(spoke, metrics))
+    state = _breaker_get(spoke.name)
+    assert state.using_fallback is True
+
+    # Patch _probe_primary so der HEAD-Call deterministisch 200 liefert,
+    # ohne echten Netzwerk-Call. Wir muessen den proxy-internen Symbol-Lookup
+    # patchen (nicht das modul-globale Symbol).
+    async def _fake_probe(_spoke):
+        return True, 200
+
+    monkeypatch.setattr("llm_router.proxy._probe_primary", _fake_probe)
+
+    # Probe-Throttle deaktivieren — der Test ruft direkt mehrfach hintereinander.
+    state.last_probe_at = None
+
+    # Weitere _RECOVERY_THRESHOLD erfolgreiche fallback-Calls → Probe ausgeloest.
+    for _ in range(_RECOVERY_THRESHOLD):
+        asyncio.run(_call(spoke, metrics))
+
+    state = _breaker_get(spoke.name)
+    assert state.using_fallback is False, "Breaker sollte recovered haben"
+    assert state.recovery_events == 1
+    assert state.consecutive_failures == 0
+
+
+def test_probe_failure_keeps_breaker_open(monkeypatch, metrics):
+    """Probe schlaegt fehl → Breaker bleibt offen, recovery_events == 0."""
+    mock = _install_mock(monkeypatch)
+    spoke = _make_spoke()
+
+    mock.behaviors["primary.example"] = [503] * _FAILOVER_THRESHOLD
+    mock.behaviors["fallback.example"] = [_MockResp(200)] * (
+        _FAILOVER_THRESHOLD + _RECOVERY_THRESHOLD
+    )
+    for _ in range(_FAILOVER_THRESHOLD):
+        asyncio.run(_call(spoke, metrics))
+    state = _breaker_get(spoke.name)
+    assert state.using_fallback is True
+
+    async def _fake_probe_bad(_spoke):
+        return False, 502
+
+    monkeypatch.setattr("llm_router.proxy._probe_primary", _fake_probe_bad)
+    state.last_probe_at = None
+
+    for _ in range(_RECOVERY_THRESHOLD):
+        asyncio.run(_call(spoke, metrics))
+
+    state = _breaker_get(spoke.name)
+    assert state.using_fallback is True, "Probe-Fail → Breaker bleibt offen"
+    assert state.recovery_events == 0
