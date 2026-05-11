@@ -197,7 +197,7 @@ class SpokeAuth(BaseModel):
 #   - "custom":          beliebiger HTTP-Workload, Capabilities frei waehlbar
 SpokeKind = Literal["ollama", "openai", "gpu-llm-manager", "paddle-ocr", "custom"]
 # Capabilities: ein Spoke kann mehrere Workload-Typen gleichzeitig anbieten.
-SpokeCapability = Literal["llm", "embedding", "ocr", "compute", "image-gen"]
+SpokeCapability = Literal["llm", "embedding", "rerank", "ocr", "compute", "image-gen"]
 
 
 class GpuInfo(BaseModel):
