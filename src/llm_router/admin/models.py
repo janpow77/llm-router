@@ -59,6 +59,17 @@ class SpokeRow(Base):
     enabled = Column(Integer, nullable=False, default=1)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
+    # Phase 3: Dynamic-Spoke-Felder.
+    # source: 'manual' (admin-UI/YAML) | 'dynamic' (self-registered via /register).
+    source = Column(String, nullable=False, default="manual")
+    # Letzter Heartbeat. Wird vom Heartbeat-Endpoint gebumpt; ein
+    # Background-Task setzt Spokes mit > 90s ohne Heartbeat auf "offline".
+    last_seen_at = Column(String, nullable=True)
+    # Optionale Versionskennung (z.B. egpu-managerd-Build, paddle-ocr-Tag).
+    version = Column(String, nullable=True)
+    # Optionaler Fallback-Endpoint fuer Auto-Failover. Wenn primary 3x in Folge
+    # 5xx/Timeout liefert, schaltet der Proxy temporaer auf fallback_url um.
+    fallback_url = Column(String, nullable=True)
 
 
 class ModelRow(Base):
@@ -197,7 +208,25 @@ class SpokeAuth(BaseModel):
 #   - "custom":          beliebiger HTTP-Workload, Capabilities frei waehlbar
 SpokeKind = Literal["ollama", "openai", "gpu-llm-manager", "paddle-ocr", "custom"]
 # Capabilities: ein Spoke kann mehrere Workload-Typen gleichzeitig anbieten.
-SpokeCapability = Literal["llm", "embedding", "rerank", "ocr", "compute", "image-gen"]
+#   - llm:       Chat-/Completion-LLM (Ollama, OpenAI-Schema)
+#   - embedding: Vektor-Einbettungen
+#   - rerank:    Cross-Encoder-Reranking
+#   - ocr:       OCR-Text-Extraktion (PaddleOCR, RapidOCR, ...)
+#   - vision:    Multimodaler Bild-/Dokumenten-Parser (LLaVA, Qwen-VL, ...)
+#   - compute:   generische GPU-Compute (z.B. eGPU-Manager-Sessions)
+#   - image-gen: Bildgenerierung (Flux/SDXL/ComfyUI)
+SpokeCapability = Literal[
+    "llm",
+    "embedding",
+    "rerank",
+    "ocr",
+    "vision",
+    "compute",
+    "image-gen",
+]
+
+# Quelle eines Spokes: 'manual' aus Admin-UI/YAML, 'dynamic' selbst-registriert.
+SpokeSource = Literal["manual", "dynamic"]
 
 
 class GpuInfo(BaseModel):
@@ -216,10 +245,22 @@ class SpokeCreate(BaseModel):
     priority: int = Field(default=100, ge=0, le=10_000)
     auth: SpokeAuth | None = None
     enabled: bool = True
+    # Optionaler Fallback-Endpoint (Auto-Failover bei 5xx/Timeout).
+    fallback_url: str | None = None
 
     @field_validator("base_url")
     @classmethod
     def _strip_url(cls, v: str) -> str:
+        return v.rstrip("/")
+
+    @field_validator("fallback_url")
+    @classmethod
+    def _strip_fallback(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
         return v.rstrip("/")
 
 
@@ -232,6 +273,42 @@ class SpokeUpdate(BaseModel):
     priority: int | None = Field(default=None, ge=0, le=10_000)
     auth: SpokeAuth | None = None
     enabled: bool | None = None
+    fallback_url: str | None = None
+
+
+class SpokeRegister(BaseModel):
+    """Payload fuer den dynamischen Spoke-Registrierungs-Endpoint.
+
+    Idempotent: existierender Spoke mit demselben ``name`` wird upgedatet
+    (Heartbeat-Auffrischung). Auth via ``X-Spoke-Token`` (env: ``SPOKE_REGISTRATION_TOKEN``).
+    """
+
+    name: str = Field(min_length=1, max_length=120)
+    base_url: str = Field(min_length=1)
+    type: SpokeKind = "custom"
+    capabilities: list[SpokeCapability] = Field(default_factory=lambda: ["llm"])
+    tags: list[str] = Field(default_factory=list)
+    priority: int = Field(default=200, ge=0, le=10_000)
+    gpu_info: GpuInfo | None = None
+    version: str | None = None
+    fallback_url: str | None = None
+    # Quelle ist hier immer "dynamic"; Feld bleibt aus Konsistenzgruenden.
+    source: Literal["dynamic"] = "dynamic"
+
+    @field_validator("base_url")
+    @classmethod
+    def _strip_url(cls, v: str) -> str:
+        return v.rstrip("/")
+
+    @field_validator("fallback_url")
+    @classmethod
+    def _strip_fallback(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        return v.rstrip("/")
 
 
 class SpokeOut(BaseModel):
@@ -250,6 +327,11 @@ class SpokeOut(BaseModel):
     models: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    # Phase 3
+    source: str = "manual"
+    last_seen_at: datetime | None = None
+    version: str | None = None
+    fallback_url: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -419,6 +501,10 @@ def spoke_row_to_out(row: SpokeRow, models: list[str] | None = None) -> SpokeOut
         models=models or [],
         created_at=_parse_dt(row.created_at),
         updated_at=_parse_dt(row.updated_at),
+        source=getattr(row, "source", None) or "manual",
+        last_seen_at=_parse_dt(row.last_seen_at) if getattr(row, "last_seen_at", None) else None,
+        version=getattr(row, "version", None),
+        fallback_url=getattr(row, "fallback_url", None),
     )
 
 

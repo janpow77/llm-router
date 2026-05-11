@@ -14,7 +14,7 @@ const TYPE_OPTIONS: { value: SpokeType; label: string; hint: string }[] = [
   { value: 'custom', label: 'Custom HTTP', hint: 'Beliebiger Workload' },
 ]
 
-const ALL_CAPABILITIES: SpokeCapability[] = ['llm', 'embedding', 'ocr', 'compute', 'image-gen']
+const ALL_CAPABILITIES: SpokeCapability[] = ['llm', 'embedding', 'rerank', 'ocr', 'vision', 'compute', 'image-gen']
 
 const form = ref({
   name: '',
@@ -26,6 +26,7 @@ const form = ref({
   auth_header: 'Authorization',
   auth_value: '',
   enabled: true,
+  fallback_url: '' as string,
 })
 
 watch(() => [props.open, props.spoke], () => {
@@ -41,6 +42,7 @@ watch(() => [props.open, props.spoke], () => {
       auth_header: props.spoke.auth?.header || 'Authorization',
       auth_value: props.spoke.auth?.value || '',
       enabled: props.spoke.enabled,
+      fallback_url: props.spoke.fallback_url || '',
     }
   } else {
     form.value = {
@@ -53,6 +55,7 @@ watch(() => [props.open, props.spoke], () => {
       auth_header: 'Authorization',
       auth_value: '',
       enabled: true,
+      fallback_url: '',
     }
   }
 }, { immediate: true })
@@ -80,6 +83,7 @@ function submit() {
     auth: form.value.auth_value
       ? { header: headerName, value: form.value.auth_value }
       : null,
+    fallback_url: form.value.fallback_url.trim() || null,
   })
 }
 </script>
@@ -107,6 +111,16 @@ v-model.number="form.priority" type="number" min="0" max="10000"
         <input
 v-model="form.base_url" required placeholder="http://100.102.132.11:7842"
           class="w-full px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-mono" />
+      </label>
+
+      <label class="block">
+        <span class="block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">Fallback-URL (optional, Auto-Failover)</span>
+        <input
+v-model="form.fallback_url" placeholder="http://backup-node:7842"
+          class="w-full px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-mono" />
+        <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+          Bei 3x 5xx/Timeout auf primary schaltet der Proxy temporaer hierher um. Reset nach 5 erfolgreichen primary-Calls.
+        </p>
       </label>
 
       <label class="block">

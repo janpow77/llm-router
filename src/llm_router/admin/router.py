@@ -50,6 +50,7 @@ from .models import (
     SettingsUpdate,
     SpokeCreate,
     SpokeOut,
+    SpokeRegister,
     SpokeUpdate,
     app_row_to_out,
     audit_row_to_out,
@@ -58,6 +59,7 @@ from .models import (
     spoke_row_to_out,
 )
 from .services import log_stream, model_discovery, spoke_health
+from .services import heartbeat as heartbeat_service
 
 log = logging.getLogger(__name__)
 
@@ -337,6 +339,66 @@ async def spokes_health_check(
     return spoke_row_to_out(row, models=crud_spokes.list_models_for_spoke(session, spoke_id))
 
 
+# ----------------------------- Dynamic-Spoke Registration -----------------
+
+
+def _check_spoke_token(request: Request) -> None:
+    """Prueft den ``X-Spoke-Token``-Header gegen ``SPOKE_REGISTRATION_TOKEN``.
+
+    Wenn die Env-Variable nicht gesetzt ist, ist der Endpoint deaktiviert
+    (501 Not Implemented). Bei falschem oder fehlendem Token: 401.
+    """
+    expected = os.environ.get("SPOKE_REGISTRATION_TOKEN") or ""
+    if not expected:
+        raise HTTPException(
+            status_code=501,
+            detail="Dynamic spoke registration disabled (set SPOKE_REGISTRATION_TOKEN)",
+        )
+    provided = request.headers.get("x-spoke-token") or ""
+    if provided != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Spoke-Token")
+
+
+@router.post("/spokes/register", response_model=SpokeOut)
+async def spokes_register(
+    payload: SpokeRegister,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    """Dynamische Spoke-Registrierung. Idempotent — existierende Spokes mit
+    demselben ``name`` werden upgedatet (Heartbeat-Auffrischung).
+
+    Auth: ``X-Spoke-Token: <SPOKE_REGISTRATION_TOKEN>``. Ohne gesetzte
+    Env-Variable liefert der Endpoint 501.
+    """
+    _check_spoke_token(request)
+    try:
+        row, created = crud_spokes.upsert_dynamic_spoke(session, payload, ip=client_ip(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    out = spoke_row_to_out(row, models=crud_spokes.list_models_for_spoke(session, row.id))
+    return JSONResponse(
+        status_code=201 if created else 200,
+        content=out.model_dump(mode="json"),
+    )
+
+
+@router.post("/spokes/{spoke_id}/heartbeat", status_code=204)
+async def spokes_heartbeat(
+    spoke_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Bumpt ``last_seen_at`` fuer einen registrierten Spoke. Auth via
+    ``X-Spoke-Token``. Liefert 404 wenn unbekannt.
+    """
+    _check_spoke_token(request)
+    row = crud_spokes.bump_heartbeat(session, spoke_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Spoke not found")
+    return Response(status_code=204)
+
+
 # ----------------------------- Models --------------------------------------
 
 
@@ -581,17 +643,33 @@ async def startup_admin(*, start_health_loop: bool = True, router_config=None) -
         task = asyncio.create_task(spoke_health.health_loop(_ADMIN_STATE["stop_event"], interval_s=interval))
         _ADMIN_STATE["health_task"] = task
 
+    # Heartbeat-Timeout-Sweep fuer dynamische Spokes.
+    # Tests koennen via ADMIN_DISABLE_HEARTBEAT_SWEEP=1 deaktivieren —
+    # implizit auch ueber ADMIN_DISABLE_HEALTH_LOOP=1 (gemeinsamer Test-Schalter).
+    if (
+        start_health_loop
+        and not os.environ.get("ADMIN_DISABLE_HEARTBEAT_SWEEP")
+        and not os.environ.get("ADMIN_DISABLE_HEALTH_LOOP")
+    ):
+        hb_task = asyncio.create_task(
+            heartbeat_service.heartbeat_loop(_ADMIN_STATE["stop_event"]),
+        )
+        _ADMIN_STATE["heartbeat_task"] = hb_task
+
 
 async def shutdown_admin() -> None:
     """Stoppt Background-Tasks. Wird vom App-Lifespan aufgerufen."""
     stop_event: asyncio.Event | None = _ADMIN_STATE.get("stop_event")
     task: asyncio.Task | None = _ADMIN_STATE.get("health_task")
+    hb_task: asyncio.Task | None = _ADMIN_STATE.get("heartbeat_task")
     if stop_event:
         stop_event.set()
-    if task:
+    for t, label in ((task, "spoke-health"), (hb_task, "heartbeat-sweep")):
+        if not t:
+            continue
         try:
-            await asyncio.wait_for(task, timeout=5.0)
+            await asyncio.wait_for(t, timeout=5.0)
         except (TimeoutError, asyncio.CancelledError):
-            task.cancel()
+            t.cancel()
         except Exception as exc:
-            log.warning("Spoke-Health-Task Shutdown: %s", exc)
+            log.warning("Background-Task '%s' shutdown: %s", label, exc)

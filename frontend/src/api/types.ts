@@ -43,9 +43,14 @@ export type SpokeType =
 export type SpokeCapability =
   | 'llm'
   | 'embedding'
+  | 'rerank'
   | 'ocr'
+  | 'vision'
   | 'compute'
   | 'image-gen'
+
+// Phase 3: Quelle eines Spokes
+export type SpokeSource = 'manual' | 'dynamic'
 
 export interface GpuInfo {
   device?: string | null
@@ -71,6 +76,11 @@ export interface Spoke {
   created_at: string
   updated_at: string
   auth?: { header?: string; value?: string } | null
+  // Phase 3: Dynamic-Spoke-Metadaten
+  source?: SpokeSource
+  last_seen_at?: string | null
+  version?: string | null
+  fallback_url?: string | null
 }
 
 export interface ModelInfo {

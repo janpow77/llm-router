@@ -110,6 +110,70 @@ async def openai_rerank(request: Request, ctx: RouterContext = Depends(get_conte
     )
 
 
+@router.api_route("/v1/vision/parse", methods=["POST"])
+async def openai_vision_parse(request: Request, ctx: RouterContext = Depends(get_context)):
+    """Vision/Doc-Parsing via Spokes mit capability='vision' (LLaVA/Qwen-VL/...).
+
+    Reicht den Body unveraendert weiter — JSON oder multipart/form-data.
+    Bei multipart wird der Body als bytes durchgereicht (kein json-Parse),
+    der Content-Type-Header bleibt erhalten.
+    """
+    app = await identify_app(request, ctx)
+    content_type = (request.headers.get("content-type") or "").lower()
+    body = await request.body()
+    model = ""
+    # Modell nur aus JSON-Body extrahieren — bei multipart bleibt es leer und
+    # das Routing greift auf den ersten Spoke mit capability=vision zurueck.
+    if "application/json" in content_type:
+        model = _extract_model_from_payload(body) or ""
+    spoke = route_for_model(model, capability="vision")
+    if not spoke:
+        return JSONResponse(status_code=503, content={"error": "no vision spoke configured"})
+    return await proxy(
+        method="POST",
+        spoke=spoke,
+        upstream_path="/v1/vision/parse",
+        headers=dict(request.headers),
+        body=body,
+        query=str(request.url.query or ""),
+        app_id=app.id,
+        metrics=ctx.metrics,
+        route_label="/v1/vision/parse",
+        response_kind="openai",
+    )
+
+
+@router.api_route("/v1/ocr", methods=["POST"])
+async def openai_ocr(request: Request, ctx: RouterContext = Depends(get_context)):
+    """OCR via Spokes mit capability='ocr' (PaddleOCR, RapidOCR, ...).
+
+    Reicht den Body unveraendert weiter — typischerweise multipart/form-data
+    mit einer Bild-/PDF-Datei. JSON-Bodies (mit base64-Payload) werden
+    ebenfalls akzeptiert.
+    """
+    app = await identify_app(request, ctx)
+    content_type = (request.headers.get("content-type") or "").lower()
+    body = await request.body()
+    model = ""
+    if "application/json" in content_type:
+        model = _extract_model_from_payload(body) or ""
+    spoke = route_for_model(model, capability="ocr")
+    if not spoke:
+        return JSONResponse(status_code=503, content={"error": "no ocr spoke configured"})
+    return await proxy(
+        method="POST",
+        spoke=spoke,
+        upstream_path="/v1/ocr",
+        headers=dict(request.headers),
+        body=body,
+        query=str(request.url.query or ""),
+        app_id=app.id,
+        metrics=ctx.metrics,
+        route_label="/v1/ocr",
+        response_kind="openai",
+    )
+
+
 @router.api_route("/v1/models", methods=["GET"])
 async def openai_models(request: Request, ctx: RouterContext = Depends(get_context)):
     app = await identify_app(request, ctx)

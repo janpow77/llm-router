@@ -66,6 +66,10 @@ class SpokeConfig:
     scheme: str = "ollama"
     weight: int = 1
     timeout_s: int = 300
+    # Optionaler sekundaerer Endpoint fuer Auto-Failover. Wenn primary 3x in
+    # Folge timeoutet/502/503/504 liefert, proxiert der Router temporaer an
+    # diese URL. Circuit-Breaker reset nach 5 erfolgreichen primary-Calls.
+    fallback_url: str | None = None
 
 
 @dataclass
