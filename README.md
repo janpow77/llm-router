@@ -1,4 +1,11 @@
-# llm-router
+# llm-router  *(legacy — Weiterentwicklung in [`ai-router`](https://github.com/janpow77/ai-router))*
+
+> **Hinweis (2026-05-12):** Dieses Repo bleibt für LLM-only-Routing und die
+> aktuelle CCX23-Container-Compat stehen. Alle neuen Entwicklungen
+> (OCR / Reranker / Embed via Spoke-Capabilities) finden im neuen Repo
+> [`janpow77/ai-router`](https://github.com/janpow77/ai-router) statt.
+> Der `feat/unified-ai-router-skeleton`-Branch hier zeigt den letzten
+> Stand vor der Gabelung (Commit `2249a46`).
 
 Zentraler LLM-Routing-Hub für die Workshop-Plattform. Empfängt Ollama- und
 OpenAI-kompatible Requests, identifiziert die Quell-App über `X-App-Id`,
